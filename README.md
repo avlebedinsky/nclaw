@@ -1,6 +1,6 @@
 # nclaw
 
-**N**Claw — a**N**other Claw. A lightweight, container-first AI coding assistant accessible through Telegram. Supports Claude Code (default), 580+ models via multi-model backend (OpenRouter, Gemini, OpenAI, Ollama, and more), OpenAI Codex, and GitHub Copilot as CLI agents. Written in Go.
+**N**Claw — a**N**other Claw. A lightweight, container-first AI coding assistant accessible through Telegram. Supports Claude Code (default), 580+ models via multi-model backend (OpenRouter, Gemini, OpenAI, Ollama, and more), OpenAI Codex, GitHub Copilot, and Google Gemini CLI as CLI agents. Written in Go.
 
 ## Table of Contents
 
@@ -56,20 +56,21 @@ The recommended way to run NClaw is inside Docker — the container serves as a 
 - **Scheduled tasks** — Create recurring or one-time jobs using natural language.
 - **Webhooks** — Register HTTP endpoints that forward incoming requests to the assistant in your chat.
 - **Rich runtime** — Docker image includes git, gh CLI, Chromium, Go, Node.js, Python/uv. The assistant can install additional packages on the fly as needed — for example, `apk add ffmpeg` to process video, `npm install -g prettier` to format code, or `pip install pandas` to analyze data.
-- **Multiple CLI agents** — Supports Claude Code (default), multi-model (580+ models via OpenRouter, Gemini, OpenAI, Ollama, etc.), OpenAI Codex, and GitHub Copilot. Switch agents via the `NCLAW_CLI` environment variable.
+- **Multiple CLI agents** — Supports Claude Code (default), multi-model (580+ models via OpenRouter, Gemini, OpenAI, Ollama, etc.), OpenAI Codex, GitHub Copilot, and Google Gemini CLI. Switch agents via the `NCLAW_CLI` environment variable.
 - **HTML-formatted replies** — Responses render using Telegram's HTML formatting with plain-text fallback.
 
 ## Docker
 
-NClaw provides five Docker images, all based on `node:24-alpine` with shared tools (git, gh CLI, Chromium, Go, Node.js, Python/uv, skills). They differ only in which CLI agent is pre-installed:
+NClaw provides six Docker images, all based on `node:24-alpine` with shared tools (git, gh CLI, Chromium, Go, Node.js, Python/uv, skills). They differ only in which CLI agent is pre-installed:
 
 | Image | Tag | CLI Backends | Size |
 |---|---|---|---|
-| **All-in-one** | `latest` | Claude Code + Multi-Model + Codex + Copilot | Largest |
+| **All-in-one** | `latest` | Claude Code + Multi-Model + Codex + Copilot + Gemini | Largest |
 | **Claude** | `claude` | Claude Code | Medium |
 | **Multi-Model** | `multi-model` | Claude Code + Multi-Model | Medium |
 | **Codex** | `codex` | OpenAI Codex | Medium |
 | **Copilot** | `copilot` | GitHub Copilot | Medium |
+| **Gemini** | `gemini` | Google Gemini CLI | Medium |
 
 All images are published to `ghcr.io/nickalie/nclaw`. The assistant can install additional packages at runtime (e.g. `apk add ffmpeg`, `pip install pandas`, `npm install -g typescript`).
 
@@ -143,6 +144,21 @@ docker run -d --name nclaw \
 
 Copilot uses GitHub OAuth authentication. Mount your config file from `~/.copilot/config.json`. To obtain credentials, install Copilot CLI locally (`npm install -g @githubnext/github-copilot-cli`) and run `/login`.
 
+### Gemini
+
+```bash
+docker run -d --name nclaw \
+  -e NCLAW_TELEGRAM_BOT_TOKEN=your-token \
+  -e NCLAW_TELEGRAM_WHITELIST_CHAT_IDS=your-chat-id \
+  -e NCLAW_DATA_DIR=/app/data \
+  -e NCLAW_CLI=gemini \
+  -v ./data:/app/data \
+  -v ~/.gemini/oauth_creds.json:/root/.gemini/oauth_creds.json:ro \
+  ghcr.io/nickalie/nclaw:gemini
+```
+
+Gemini CLI uses Google account OAuth authentication. Mount your credentials file from `~/.gemini/oauth_creds.json`. To obtain credentials, install Gemini CLI locally (`npm install -g @google/gemini-cli`) and sign in on first run.
+
 ### All-in-one
 
 ```bash
@@ -155,7 +171,7 @@ docker run -d --name nclaw \
   ghcr.io/nickalie/nclaw:latest
 ```
 
-The all-in-one image includes all four CLI agents. Set `NCLAW_CLI` to `claude` (default), `claudish` (multi-model), `codex`, or `copilot` to choose the agent. Mount the appropriate credentials for your chosen agent.
+The all-in-one image includes all five CLI agents. Set `NCLAW_CLI` to `claude` (default), `claudish` (multi-model), `codex`, `copilot`, or `gemini` to choose the agent. Mount the appropriate credentials for your chosen agent.
 
 ### Webhooks
 
@@ -280,6 +296,10 @@ kubectl create secret generic my-codex-secret \
 # Copilot
 kubectl create secret generic my-copilot-secret \
   --from-file=config.json=$HOME/.copilot/config.json
+
+# Gemini
+kubectl create secret generic my-gemini-secret \
+  --from-file=oauth_creds.json=$HOME/.gemini/oauth_creds.json
 ```
 
 ### Helm values
@@ -292,12 +312,13 @@ kubectl create secret generic my-copilot-secret \
 | `env.telegramBotToken` | `""` | Telegram bot token |
 | `env.whitelistChatIds` | `""` | Comma-separated allowed chat IDs |
 | `env.webhookBaseDomain` | `""` | Base domain for webhook URLs |
-| `env.cli` | `""` | CLI agent: `claude`, `claudish` (multi-model), `codex`, or `copilot` (empty = image default) |
+| `env.cli` | `""` | CLI agent: `claude`, `claudish` (multi-model), `codex`, `copilot`, or `gemini` (empty = image default) |
 | `env.model` | `""` | Model for multi-model backend (e.g. `g@gemini-2.5-pro`). Setting this auto-selects multi-model |
 | `existingSecret` | `""` | Use existing secret for bot token (key: `telegram-bot-token`) |
 | `claudeCredentialsSecret` | `""` | Secret with Claude credentials (key: `credentials.json`) |
 | `codexCredentialsSecret` | `""` | Secret with Codex credentials (key: `auth.json`) |
 | `copilotCredentialsSecret` | `""` | Secret with Copilot credentials (key: `config.json`) |
+| `geminiCredentialsSecret` | `""` | Secret with Gemini credentials (key: `oauth_creds.json`) |
 | `persistence.enabled` | `true` | Enable persistent storage |
 | `persistence.size` | `1Gi` | PVC size |
 | `persistence.storageClass` | `""` | Storage class |
@@ -314,7 +335,7 @@ kubectl create secret generic my-copilot-secret \
 
 ## Running without Docker
 
-NClaw is a regular executable and can run directly on any machine. The only runtime dependency is the CLI for your chosen agent — [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (default), [claudish](https://github.com/MadAppGang/claudish) (multi-model), [OpenAI Codex](https://github.com/openai/codex), or [GitHub Copilot](https://docs.github.com/en/copilot/github-copilot-in-the-cli) — it must be installed and available in `PATH`.
+NClaw is a regular executable and can run directly on any machine. The only runtime dependency is the CLI for your chosen agent — [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (default), [claudish](https://github.com/MadAppGang/claudish) (multi-model), [OpenAI Codex](https://github.com/openai/codex), [GitHub Copilot](https://docs.github.com/en/copilot/github-copilot-in-the-cli), or [Gemini CLI](https://github.com/google-gemini/gemini-cli) — it must be installed and available in `PATH`.
 
 > **Security notice:** Without Docker, the CLI agent runs directly on the host with the same permissions as the nclaw process. It has full access to the file system, network, and any credentials available to the user. Run under a dedicated unprivileged user and avoid running as root. For production use, Docker or Kubernetes deployment is strongly recommended.
 
@@ -410,7 +431,7 @@ NClaw variables use the `NCLAW_` prefix. Provider API keys use the provider's na
 |---|---|---|---|
 | `NCLAW_TELEGRAM_BOT_TOKEN` | Yes | — | Telegram bot token from [@BotFather](https://t.me/BotFather) |
 | `NCLAW_DATA_DIR` | Yes | — | Base directory for session data and files |
-| `NCLAW_CLI` | No | `claude` | CLI agent: `claude`, `claudish` (multi-model), `codex`, or `copilot`. Auto-selects `claudish` when `NCLAW_MODEL` is set |
+| `NCLAW_CLI` | No | `claude` | CLI agent: `claude`, `claudish` (multi-model), `codex`, `copilot`, or `gemini`. Auto-selects `claudish` when `NCLAW_MODEL` is set |
 | `NCLAW_MODEL` | No | — | Model for multi-model backend (e.g. `g@gemini-2.5-pro`). Setting this auto-selects multi-model |
 | `NCLAW_TELEGRAM_WHITELIST_CHAT_IDS` | No | — | Comma-separated list of allowed Telegram chat IDs. If unset, accepts all chats (with a security warning) |
 | `NCLAW_DB_PATH` | No | `{data_dir}/nclaw.db` | Path to the SQLite database |
@@ -429,7 +450,7 @@ telegram:
   bot_token: "your-telegram-bot-token"
   whitelist_chat_ids: "123456789,987654321"
 
-cli: "claude"  # Options: claude, claudish, codex, copilot
+cli: "claude"  # Options: claude, claudish, codex, copilot, gemini
 data_dir: "/app/data"
 db_path: "/app/data/nclaw.db"
 timezone: "Europe/Berlin"

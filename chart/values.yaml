@@ -20,7 +20,7 @@ env:
   whitelistChatIds: ""
   # Base domain for webhook URLs
   webhookBaseDomain: ""
-  # CLI backend: claude, claudish, codex, or copilot (empty = image default)
+  # CLI backend: claude, claudish, codex, copilot, or gemini (empty = image default)
   cli: ""
   # Model for claudish (e.g. g@gemini-2.5-pro). Setting this auto-selects claudish
   model: ""
@@ -71,6 +71,10 @@ codexCredentialsSecret: ""
 # Copilot credentials to mount into /root/.copilot/config.json
 # Provide via secret — the key must be "config.json"
 copilotCredentialsSecret: ""
+
+# Gemini credentials to mount into /root/.gemini/oauth_creds.json
+# Provide via secret — the key must be "oauth_creds.json"
+geminiCredentialsSecret: ""
 
 # Claudish API keys secret — keys are injected as env vars via envFrom.
 # Use the provider's native env var name as the key (e.g. OPENROUTER_API_KEY, GEMINI_API_KEY).
