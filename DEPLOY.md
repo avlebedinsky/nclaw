@@ -26,6 +26,11 @@ NCLAW_TELEGRAM_WHITELIST_CHAT_IDS=123456789
 # Linux/Mac: /home/<username>/.claude/.credentials.json
 CLAUDE_CREDENTIALS_PATH=C:/Users/<username>/.claude/.credentials.json
 
+# Skills persistence (optional, these are the defaults)
+# Skills created by the assistant are stored here and survive image updates.
+# CLAUDE_SKILLS_PATH=./claude-skills
+# AGENTS_PATH=./agents
+
 # Proxy (optional, leave commented out if not needed)
 # HTTP_PROXY=http://user:pass@host:port
 ```

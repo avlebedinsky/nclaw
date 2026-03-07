@@ -12,3 +12,5 @@ services:
     volumes:
       - ./data:/app/data
       - ${CLAUDE_CREDENTIALS_PATH}:/root/.claude/.credentials.json
+      - ${CLAUDE_SKILLS_PATH:-./claude-skills}:/root/.claude/skills
+      - ${AGENTS_PATH:-./agents}:/root/.agents
