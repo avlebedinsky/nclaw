@@ -138,7 +138,7 @@ To use **Claude Code** instead (requires an Anthropic account with Claude Code a
      -e NCLAW_TELEGRAM_WHITELIST_CHAT_IDS=your-chat-id \
      -e NCLAW_DATA_DIR=/app/data \
      -v ./data:/app/data \
-     -v ~/.claude/.credentials.json:/root/.claude/.credentials.json:ro \
+     -v ~/.claude/.credentials.json:/root/.claude/.credentials.json \
      ghcr.io/nickalie/nclaw:claude
    ```
 
@@ -174,11 +174,11 @@ docker run -d --name nclaw \
   -e NCLAW_TELEGRAM_WHITELIST_CHAT_IDS=your-chat-id \
   -e NCLAW_DATA_DIR=/app/data \
   -v ./data:/app/data \
-  -v ~/.claude/.credentials.json:/root/.claude/.credentials.json:ro \
+  -v ~/.claude/.credentials.json:/root/.claude/.credentials.json \
   ghcr.io/nickalie/nclaw:claude
 ```
 
-Claude Code uses OAuth authentication. Mount your credentials file from `~/.claude/.credentials.json`. To obtain credentials, install Claude Code locally and run `claude login`.
+Claude Code uses OAuth authentication. Mount your credentials file from `~/.claude/.credentials.json`. To obtain credentials, install Claude Code locally and run `claude login`. Do **not** mount the file as read-only (`:ro`) — write access is required so the token can be refreshed automatically.
 
 ### Multi-Model
 
@@ -259,7 +259,7 @@ docker run -d --name nclaw \
   -e NCLAW_TELEGRAM_WHITELIST_CHAT_IDS=your-chat-id \
   -e NCLAW_DATA_DIR=/app/data \
   -v ./data:/app/data \
-  -v ~/.claude/.credentials.json:/root/.claude/.credentials.json:ro \
+  -v ~/.claude/.credentials.json:/root/.claude/.credentials.json \
   ghcr.io/nickalie/nclaw:latest
 ```
 
@@ -278,7 +278,7 @@ docker run -d --name nclaw \
   -e NCLAW_WEBHOOK_PORT=:3000 \
   -p 3000:3000 \
   -v ./data:/app/data \
-  -v ~/.claude/.credentials.json:/root/.claude/.credentials.json:ro \
+  -v ~/.claude/.credentials.json:/root/.claude/.credentials.json \
   ghcr.io/nickalie/nclaw:latest
 ```
 
