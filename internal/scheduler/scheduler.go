@@ -89,13 +89,16 @@ func (s *Scheduler) LoadTasks() {
 		return
 	}
 
+	var loaded int
 	for i := range tasks {
 		if err := s.addJob(&tasks[i]); err != nil {
 			log.Printf("scheduler: load task %s: %v", tasks[i].ID, err)
+		} else {
+			loaded++
 		}
 	}
 
-	log.Printf("scheduler: loaded %d active tasks", len(tasks))
+	log.Printf("scheduler: loaded %d/%d active tasks", loaded, len(tasks))
 }
 
 // CreateTask persists a task and registers it with gocron.
@@ -228,6 +231,10 @@ func (s *Scheduler) jobDefinition(task *model.ScheduledTask) (gocron.JobDefiniti
 		t, err := time.ParseInLocation("2006-01-02T15:04:05", task.ScheduleValue, s.loc)
 		if err != nil {
 			return nil, fmt.Errorf("parse once time %q: %w", task.ScheduleValue, err)
+		}
+		if t.Before(time.Now()) {
+			log.Printf("scheduler: once task %s scheduled for %s is in the past, running immediately", task.ID, task.ScheduleValue)
+			return gocron.OneTimeJob(gocron.OneTimeJobStartImmediately()), nil
 		}
 		return gocron.OneTimeJob(gocron.OneTimeJobStartDateTime(t)), nil
 	default:
