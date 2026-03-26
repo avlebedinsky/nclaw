@@ -51,6 +51,10 @@ func TestTimezone_Configured(t *testing.T) {
 
 func TestInit_MissingRequired(t *testing.T) {
 	viper.Reset()
+	// Clear env vars so AutomaticEnv doesn't satisfy required keys.
+	for _, key := range []string{"NCLAW_TELEGRAM_BOT_TOKEN", "NCLAW_DATA_DIR"} {
+		t.Setenv(key, "")
+	}
 
 	err := Init()
 	assert.Error(t, err)
@@ -197,4 +201,47 @@ func TestModelSubagent(t *testing.T) {
 	defer viper.Reset()
 
 	assert.Equal(t, "gpt-4o-mini", ModelSubagent())
+}
+
+func TestLogSecurityWarnings_NoWhitelist(t *testing.T) {
+	viper.Reset()
+	defer viper.Reset()
+
+	// Should not panic when no whitelist is configured.
+	LogSecurityWarnings()
+}
+
+func TestLogSecurityWarnings_WithWhitelist(t *testing.T) {
+	viper.Set("telegram.whitelist_chat_ids", "100,200")
+	defer viper.Reset()
+
+	// Should not panic when whitelist is configured.
+	LogSecurityWarnings()
+}
+
+func TestWhitelistChatIDs_Empty(t *testing.T) {
+	viper.Reset()
+	defer viper.Reset()
+
+	ids := WhitelistChatIDs()
+	assert.Empty(t, ids)
+}
+
+func TestWhitelistChatIDs_InvalidValues(t *testing.T) {
+	viper.Set("telegram.whitelist_chat_ids", "abc,123,def")
+	defer viper.Reset()
+
+	ids := WhitelistChatIDs()
+	assert.Equal(t, []int64{123}, ids)
+}
+
+func TestInit_PartialRequired(t *testing.T) {
+	viper.Reset()
+	// Set bot_token but not data_dir.
+	t.Setenv("NCLAW_TELEGRAM_BOT_TOKEN", "some-token")
+	t.Setenv("NCLAW_DATA_DIR", "")
+
+	err := Init()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "data_dir")
 }

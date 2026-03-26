@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -308,4 +309,51 @@ func TestAtomicWriteJSON(t *testing.T) {
 	info, err := os.Stat(path)
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+}
+
+func TestDefaultCredentialsPath(t *testing.T) {
+	path, err := defaultCredentialsPath()
+	require.NoError(t, err)
+	assert.True(t, strings.HasSuffix(path, ".credentials.json"),
+		"expected path to end with .credentials.json, got %s", path)
+	assert.Contains(t, path, ".claude")
+}
+
+func TestSetRawField_InvalidJSON(t *testing.T) {
+	// setRawField marshals the value; passing an un-marshalable value
+	// (like a channel) should not panic, it just logs and skips.
+	m := map[string]json.RawMessage{}
+	setRawField(m, "bad", make(chan int))
+	_, exists := m["bad"]
+	assert.False(t, exists, "field should not be set for un-marshalable value")
+}
+
+func TestSetRawField_ValidValues(t *testing.T) {
+	m := map[string]json.RawMessage{}
+
+	setRawField(m, "str", "hello")
+	setRawField(m, "num", 42)
+	setRawField(m, "flag", true)
+
+	var s string
+	require.NoError(t, json.Unmarshal(m["str"], &s))
+	assert.Equal(t, "hello", s)
+
+	var n int
+	require.NoError(t, json.Unmarshal(m["num"], &n))
+	assert.Equal(t, 42, n)
+
+	var b bool
+	require.NoError(t, json.Unmarshal(m["flag"], &b))
+	assert.True(t, b)
+}
+
+func TestAtomicWriteJSON_InvalidPath(t *testing.T) {
+	// Write to a path under a nonexistent directory.
+	path := filepath.Join(t.TempDir(), "nonexistent", "subdir", "test.json")
+	data := map[string]json.RawMessage{
+		"key": json.RawMessage(`"value"`),
+	}
+	err := atomicWriteJSON(path, data)
+	assert.Error(t, err)
 }

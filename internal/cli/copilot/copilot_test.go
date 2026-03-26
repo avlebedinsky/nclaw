@@ -189,3 +189,104 @@ func TestNew_DefaultFields(t *testing.T) {
 	assert.Equal(t, "", c.systemPrompt)
 	assert.False(t, c.skipPermissions)
 }
+
+func TestAddCommonArgs_WithDir(t *testing.T) {
+	c := New()
+	c.dir = "/work"
+
+	c.prepare()
+
+	args := c.bin.Args()
+	assert.Contains(t, args, "-s")
+	assert.Contains(t, args, "-p")
+	// Dir is set via bin.Dir(), not as an arg, so it won't appear in Args().
+	assert.NotContains(t, args, "--cd")
+}
+
+func TestAddCommonArgs_Empty(t *testing.T) {
+	c := New()
+
+	c.prepare()
+
+	args := c.bin.Args()
+	assert.Contains(t, args, "-s")
+	assert.Contains(t, args, "-p")
+	assert.NotContains(t, args, "--allow-all-tools")
+	assert.NotContains(t, args, "--no-ask-user")
+	assert.NotContains(t, args, "--continue")
+}
+
+func TestPrepareContinue_WithDir(t *testing.T) {
+	c := New()
+	c.dir = "/work"
+	c.skipPermissions = true
+
+	c.prepareContinue()
+
+	args := c.bin.Args()
+	assert.Contains(t, args, "--continue")
+	assert.Contains(t, args, "-s")
+	assert.Contains(t, args, "--allow-all-tools")
+	assert.Contains(t, args, "--no-ask-user")
+	assert.Contains(t, args, "-p")
+}
+
+func TestWriteSystemPrompt_Overwrites(t *testing.T) {
+	dir := t.TempDir()
+	c := New()
+	c.dir = dir
+	c.systemPrompt = "First version"
+
+	err := c.writeSystemPrompt()
+	require.NoError(t, err)
+
+	// Overwrite with new content.
+	c.systemPrompt = "Second version"
+	err = c.writeSystemPrompt()
+	require.NoError(t, err)
+
+	content, err := os.ReadFile(filepath.Join(dir, ".github", "copilot-instructions.md"))
+	require.NoError(t, err)
+	assert.Equal(t, "Second version", string(content))
+}
+
+func TestBuilderFieldValues(t *testing.T) {
+	c := New()
+	c.Dir("/work")
+	c.AppendSystemPrompt("custom prompt")
+	c.SkipPermissions()
+
+	assert.Equal(t, "/work", c.dir)
+	assert.Equal(t, "custom prompt", c.systemPrompt)
+	assert.True(t, c.skipPermissions)
+}
+
+func TestPrepare_FullConfig(t *testing.T) {
+	c := New()
+	c.dir = "/work"
+	c.skipPermissions = true
+
+	c.prepare()
+
+	args := c.bin.Args()
+	assert.Contains(t, args, "-s")
+	assert.Contains(t, args, "--allow-all-tools")
+	assert.Contains(t, args, "--no-ask-user")
+	assert.Contains(t, args, "-p")
+	assert.NotContains(t, args, "--continue")
+}
+
+func TestPrepareContinue_FullConfig(t *testing.T) {
+	c := New()
+	c.dir = "/work"
+	c.skipPermissions = true
+
+	c.prepareContinue()
+
+	args := c.bin.Args()
+	assert.Contains(t, args, "--continue")
+	assert.Contains(t, args, "-s")
+	assert.Contains(t, args, "--allow-all-tools")
+	assert.Contains(t, args, "--no-ask-user")
+	assert.Contains(t, args, "-p")
+}

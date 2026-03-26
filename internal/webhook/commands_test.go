@@ -426,3 +426,176 @@ func TestSplitMessage_NoNewline(t *testing.T) {
 	assert.Equal(t, "aaaaaaaaaa", chunks[0])
 	assert.Equal(t, "bbbbbbbbbb", chunks[1])
 }
+
+func TestExecuteBlocks_PauseTask(t *testing.T) {
+	m := setupTestManager(t)
+
+	// Create a webhook, then try to pause it via a schedule pause command.
+	// The webhook manager only handles webhook actions; pause is not a supported action.
+	// So we test that pause on the webhook manager returns an unknown action error.
+	text := "```nclaw:webhook\n" +
+		`{"action":"pause","webhook_id":"some-id"}` +
+		"\n```"
+	result := m.ExecuteBlocks(text, 100, 0)
+	assert.Contains(t, result, "Webhook error")
+	assert.Contains(t, result, "unknown action")
+}
+
+func TestExecuteBlocks_ResumeTask(t *testing.T) {
+	m := setupTestManager(t)
+
+	// Resume is not a supported webhook action.
+	text := "```nclaw:webhook\n" +
+		`{"action":"resume","webhook_id":"some-id"}` +
+		"\n```"
+	result := m.ExecuteBlocks(text, 100, 0)
+	assert.Contains(t, result, "Webhook error")
+	assert.Contains(t, result, "unknown action")
+}
+
+func TestExecuteBlocks_CancelTask(t *testing.T) {
+	m := setupTestManager(t)
+
+	// Cancel is not a supported webhook action.
+	text := "```nclaw:webhook\n" +
+		`{"action":"cancel","webhook_id":"some-id"}` +
+		"\n```"
+	result := m.ExecuteBlocks(text, 100, 0)
+	assert.Contains(t, result, "Webhook error")
+	assert.Contains(t, result, "unknown action")
+}
+
+func TestExecuteBlocks_DeleteWebhook_NotFound(t *testing.T) {
+	m := setupTestManager(t)
+
+	text := "```nclaw:webhook\n" +
+		`{"action":"delete","webhook_id":"nonexistent-id"}` +
+		"\n```"
+	result := m.ExecuteBlocks(text, 100, 0)
+	assert.Contains(t, result, "Webhook error")
+	assert.Contains(t, result, "webhook not found")
+}
+
+func TestExecuteBlocks_DeleteWebhook_WrongChat(t *testing.T) {
+	m := setupTestManager(t)
+
+	// Create webhook in chat 200.
+	wh, err := m.Create("cross-chat hook", 200, 0)
+	require.NoError(t, err)
+
+	// Try to delete from chat 100 — should fail.
+	text := "```nclaw:webhook\n" +
+		`{"action":"delete","webhook_id":"` + wh.ID + `"}` +
+		"\n```"
+	result := m.ExecuteBlocks(text, 100, 0)
+	assert.Contains(t, result, "Webhook error")
+	assert.Contains(t, result, "webhook not found")
+
+	// Verify it still exists.
+	webhooks, err := m.List(200, 0)
+	require.NoError(t, err)
+	assert.Len(t, webhooks, 1)
+}
+
+func TestExecuteBlocks_ListWebhooks_MultipleChats(t *testing.T) {
+	m := setupTestManager(t)
+
+	_, err := m.Create("hook A", 100, 0)
+	require.NoError(t, err)
+	_, err = m.Create("hook B", 100, 0)
+	require.NoError(t, err)
+	_, err = m.Create("hook C", 200, 0)
+	require.NoError(t, err)
+
+	text := "```nclaw:webhook\n{\"action\":\"list\"}\n```"
+	result := m.ExecuteBlocks(text, 100, 0)
+	assert.Contains(t, result, "hook A")
+	assert.Contains(t, result, "hook B")
+	assert.NotContains(t, result, "hook C")
+}
+
+func TestBuildIncomingPrompt_Full(t *testing.T) {
+	wh := &model.WebhookRegistration{Description: "full test"}
+	req := IncomingRequest{
+		Method:  "PUT",
+		Headers: map[string]string{"Content-Type": "text/plain", "Accept": "application/json"},
+		Query:   map[string]string{"page": "1", "limit": "10"},
+		Body:    "request body content",
+	}
+
+	prompt := buildIncomingPrompt(wh, req)
+	assert.Contains(t, prompt, "WEBHOOK REQUEST")
+	assert.Contains(t, prompt, "full test")
+	assert.Contains(t, prompt, "PUT")
+	assert.Contains(t, prompt, "Headers:")
+	assert.Contains(t, prompt, "Content-Type: text/plain")
+	assert.Contains(t, prompt, "Accept: application/json")
+	assert.Contains(t, prompt, "Query Parameters:")
+	assert.Contains(t, prompt, "page: 1")
+	assert.Contains(t, prompt, "limit: 10")
+	assert.Contains(t, prompt, "Body:")
+	assert.Contains(t, prompt, "request body content")
+}
+
+func TestBuildIncomingPrompt_MethodOnly(t *testing.T) {
+	wh := &model.WebhookRegistration{Description: "minimal"}
+	req := IncomingRequest{Method: "DELETE"}
+
+	prompt := buildIncomingPrompt(wh, req)
+	assert.Contains(t, prompt, "minimal")
+	assert.Contains(t, prompt, "DELETE")
+	assert.NotContains(t, prompt, "Headers:")
+	assert.NotContains(t, prompt, "Query Parameters:")
+	assert.NotContains(t, prompt, "Body:")
+}
+
+func TestBuildIncomingPrompt_SensitiveHeadersFiltered(t *testing.T) {
+	wh := &model.WebhookRegistration{Description: "sensitive test"}
+	req := IncomingRequest{
+		Method: "POST",
+		Headers: map[string]string{
+			"Content-Type":        "application/json",
+			"Authorization":       "Bearer super-secret",
+			"Cookie":              "session=private",
+			"Set-Cookie":          "id=hidden",
+			"Proxy-Authorization": "Basic creds",
+			"X-Api-Key":           "key-123",
+			"X-Hub-Signature-256": "sha256=abc",
+			"X-Custom-Header":     "visible",
+		},
+	}
+
+	prompt := buildIncomingPrompt(wh, req)
+	// Safe headers should be present.
+	assert.Contains(t, prompt, "Content-Type: application/json")
+	assert.Contains(t, prompt, "X-Custom-Header: visible")
+	// Sensitive headers should be filtered out.
+	assert.NotContains(t, prompt, "super-secret")
+	assert.NotContains(t, prompt, "session=private")
+	assert.NotContains(t, prompt, "id=hidden")
+	assert.NotContains(t, prompt, "Basic creds")
+	assert.NotContains(t, prompt, "key-123")
+	assert.NotContains(t, prompt, "sha256=abc")
+}
+
+func TestBuildIncomingPrompt_EmptyHeaders(t *testing.T) {
+	wh := &model.WebhookRegistration{Description: "empty headers"}
+	req := IncomingRequest{
+		Method:  "GET",
+		Headers: map[string]string{},
+	}
+
+	prompt := buildIncomingPrompt(wh, req)
+	assert.NotContains(t, prompt, "Headers:")
+}
+
+func TestBuildIncomingPrompt_EmptyQuery(t *testing.T) {
+	wh := &model.WebhookRegistration{Description: "empty query"}
+	req := IncomingRequest{
+		Method: "GET",
+		Query:  map[string]string{},
+	}
+
+	prompt := buildIncomingPrompt(wh, req)
+	assert.NotContains(t, prompt, "Query Parameters:")
+}

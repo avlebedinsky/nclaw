@@ -181,3 +181,111 @@ func TestProvider_PreInvoke(t *testing.T) {
 	p := NewProvider()
 	assert.NoError(t, p.PreInvoke())
 }
+
+func TestAddCommonArgs_WithDir(t *testing.T) {
+	g := New()
+	g.dir = "/work"
+
+	g.prepare()
+
+	args := g.bin.Args()
+	assert.Contains(t, args, "--output-format")
+	assert.Contains(t, args, "stream-json")
+	assert.Contains(t, args, "-p")
+	// Dir is set via bin.Dir(), not as an arg.
+	assert.NotContains(t, args, "--cd")
+}
+
+func TestAddCommonArgs_Empty(t *testing.T) {
+	g := New()
+
+	g.prepare()
+
+	args := g.bin.Args()
+	assert.Contains(t, args, "--output-format")
+	assert.Contains(t, args, "stream-json")
+	assert.Contains(t, args, "-p")
+	assert.NotContains(t, args, "--approval-mode")
+	assert.NotContains(t, args, "yolo")
+	assert.NotContains(t, args, "--resume")
+}
+
+func TestPrepareContinue_WithDir(t *testing.T) {
+	g := New()
+	g.dir = "/work"
+	g.skipPermissions = true
+
+	g.prepareContinue()
+
+	args := g.bin.Args()
+	assert.Contains(t, args, "--resume")
+	assert.Contains(t, args, "latest")
+	assert.Contains(t, args, "--output-format")
+	assert.Contains(t, args, "stream-json")
+	assert.Contains(t, args, "--approval-mode")
+	assert.Contains(t, args, "yolo")
+	assert.Contains(t, args, "-p")
+}
+
+func TestWriteSystemPrompt_Overwrites(t *testing.T) {
+	dir := t.TempDir()
+	g := New()
+	g.dir = dir
+	g.systemPrompt = "First version"
+
+	err := g.writeSystemPrompt()
+	require.NoError(t, err)
+
+	// Overwrite with new content.
+	g.systemPrompt = "Second version"
+	err = g.writeSystemPrompt()
+	require.NoError(t, err)
+
+	content, err := os.ReadFile(filepath.Join(dir, "GEMINI.md"))
+	require.NoError(t, err)
+	assert.Equal(t, "Second version", string(content))
+}
+
+func TestBuilderFieldValues(t *testing.T) {
+	g := New()
+	g.Dir("/work")
+	g.AppendSystemPrompt("custom prompt")
+	g.SkipPermissions()
+
+	assert.Equal(t, "/work", g.dir)
+	assert.Equal(t, "custom prompt", g.systemPrompt)
+	assert.True(t, g.skipPermissions)
+}
+
+func TestPrepare_FullConfig(t *testing.T) {
+	g := New()
+	g.dir = "/work"
+	g.skipPermissions = true
+
+	g.prepare()
+
+	args := g.bin.Args()
+	assert.Contains(t, args, "--output-format")
+	assert.Contains(t, args, "stream-json")
+	assert.Contains(t, args, "--approval-mode")
+	assert.Contains(t, args, "yolo")
+	assert.Contains(t, args, "-p")
+	assert.NotContains(t, args, "--resume")
+}
+
+func TestPrepareContinue_FullConfig(t *testing.T) {
+	g := New()
+	g.dir = "/work"
+	g.skipPermissions = true
+
+	g.prepareContinue()
+
+	args := g.bin.Args()
+	assert.Contains(t, args, "--resume")
+	assert.Contains(t, args, "latest")
+	assert.Contains(t, args, "--output-format")
+	assert.Contains(t, args, "stream-json")
+	assert.Contains(t, args, "--approval-mode")
+	assert.Contains(t, args, "yolo")
+	assert.Contains(t, args, "-p")
+}

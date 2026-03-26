@@ -168,3 +168,75 @@ func TestPrepare_ResetsBetweenCalls(t *testing.T) {
 	assert.Contains(t, secondArgs, "/second")
 	assert.Contains(t, secondArgs, "resume")
 }
+
+func TestPrepare_FullConfig(t *testing.T) {
+	c := New()
+	c.dir = "/work"
+	c.skipPermissions = true
+
+	c.prepare()
+
+	args := c.bin.Args()
+	assert.Contains(t, args, "exec")
+	assert.Contains(t, args, "--json")
+	assert.Contains(t, args, "--full-auto")
+	assert.Contains(t, args, "--cd")
+	assert.Contains(t, args, "/work")
+	// -p should not be present (codex doesn't use it)
+	assert.NotContains(t, args, "-p")
+}
+
+func TestPrepare_ExtraArgsAppended(t *testing.T) {
+	c := New()
+
+	c.prepare("resume", "--last")
+
+	args := c.bin.Args()
+	// Extra args should come after base args.
+	assert.Contains(t, args, "exec")
+	assert.Contains(t, args, "--json")
+	assert.Contains(t, args, "resume")
+	assert.Contains(t, args, "--last")
+}
+
+func TestPrepare_MinimalConfig(t *testing.T) {
+	c := New()
+
+	c.prepare()
+
+	args := c.bin.Args()
+	assert.Contains(t, args, "exec")
+	assert.Contains(t, args, "--json")
+	assert.NotContains(t, args, "--full-auto")
+	assert.NotContains(t, args, "--cd")
+}
+
+func TestWriteSystemPrompt_Overwrites(t *testing.T) {
+	dir := t.TempDir()
+	c := New()
+	c.dir = dir
+	c.systemPrompt = "First version"
+
+	err := c.writeSystemPrompt()
+	require.NoError(t, err)
+
+	// Overwrite with new content.
+	c.systemPrompt = "Second version"
+	err = c.writeSystemPrompt()
+	require.NoError(t, err)
+
+	content, err := os.ReadFile(filepath.Join(dir, "AGENTS.md"))
+	require.NoError(t, err)
+	assert.Equal(t, "Second version", string(content))
+}
+
+func TestBuilderFieldValues(t *testing.T) {
+	c := New()
+	c.Dir("/work")
+	c.AppendSystemPrompt("custom prompt")
+	c.SkipPermissions()
+
+	assert.Equal(t, "/work", c.dir)
+	assert.Equal(t, "custom prompt", c.systemPrompt)
+	assert.True(t, c.skipPermissions)
+}

@@ -111,6 +111,15 @@ make docker-gemini   # Build Gemini-only image
 - Standard Go conventions
 - Never mention "Claude Code" in commit messages or PR titles/descriptions
 
+## Testing
+
+- Always write tests for new code and bug fixes
+- Use `github.com/stretchr/testify` (assert/require)
+- Use in-memory SQLite for database tests
+- Use `t.TempDir()` for file system tests
+- Use `httptest.NewServer` for HTTP-dependent tests
+- Test files live next to source files (`*_test.go`)
+
 ## Tech Stack
 
 - Go 1.25

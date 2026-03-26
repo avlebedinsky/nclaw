@@ -176,3 +176,285 @@ func TestProvider_PreInvoke(t *testing.T) {
 	withTestCredPath(t, filepath.Join(t.TempDir(), "nonexistent.json"))
 	assert.NoError(t, p.PreInvoke())
 }
+
+func TestPrepare_ExtraArgs(t *testing.T) {
+	c := New()
+	c.prepare("-p")
+	args := c.bin.Args()
+	assert.Contains(t, args, "-p")
+}
+
+func TestPrepare_ContinueArgs(t *testing.T) {
+	c := New()
+	c.prepare("-c", "-p")
+	args := c.bin.Args()
+	assert.Contains(t, args, "-c")
+	assert.Contains(t, args, "-p")
+}
+
+func TestPrepareModel_WithModel(t *testing.T) {
+	c := New().Model("opus")
+	c.outputFormat = formatStreamJSON
+	c.bin.Reset()
+	c.prepareModel()
+	args := c.bin.Args()
+	assert.Contains(t, args, "--model")
+	assert.Contains(t, args, "opus")
+	assert.Contains(t, args, "--output-format")
+	assert.Contains(t, args, "stream-json")
+}
+
+func TestPrepareModel_WithFallbackModel(t *testing.T) {
+	c := New().Model("opus").FallbackModel("sonnet")
+	c.bin.Reset()
+	c.prepareModel()
+	args := c.bin.Args()
+	assert.Contains(t, args, "--model")
+	assert.Contains(t, args, "opus")
+	assert.Contains(t, args, "--fallback-model")
+	assert.Contains(t, args, "sonnet")
+}
+
+func TestPrepareModel_Empty(t *testing.T) {
+	c := New()
+	c.bin.Reset()
+	c.prepareModel()
+	args := c.bin.Args()
+	assert.NotContains(t, args, "--model")
+	assert.NotContains(t, args, "--fallback-model")
+	assert.NotContains(t, args, "--output-format")
+}
+
+func TestPreparePrompt_SystemPrompt(t *testing.T) {
+	c := New().SystemPrompt("you are a bot")
+	c.bin.Reset()
+	c.preparePrompt()
+	args := c.bin.Args()
+	assert.Contains(t, args, "--system-prompt")
+	assert.Contains(t, args, "you are a bot")
+}
+
+func TestPreparePrompt_AppendPrompt(t *testing.T) {
+	c := New()
+	c.AppendSystemPrompt("extra instructions")
+	c.bin.Reset()
+	c.preparePrompt()
+	args := c.bin.Args()
+	assert.Contains(t, args, "--append-system-prompt")
+	assert.Contains(t, args, "extra instructions")
+}
+
+func TestPreparePrompt_PermissionMode(t *testing.T) {
+	c := New().PermissionMode("plan")
+	c.bin.Reset()
+	c.preparePrompt()
+	args := c.bin.Args()
+	assert.Contains(t, args, "--permission-mode")
+	assert.Contains(t, args, "plan")
+}
+
+func TestPreparePrompt_MCPConfig(t *testing.T) {
+	c := New().MCPConfig("/path/to/config.json")
+	c.bin.Reset()
+	c.preparePrompt()
+	args := c.bin.Args()
+	assert.Contains(t, args, "--mcp-config")
+	assert.Contains(t, args, "/path/to/config.json")
+}
+
+func TestPreparePrompt_JSONSchema(t *testing.T) {
+	c := New().JSONSchema(`{"type":"object"}`)
+	c.bin.Reset()
+	c.preparePrompt()
+	args := c.bin.Args()
+	assert.Contains(t, args, "--json-schema")
+	assert.Contains(t, args, `{"type":"object"}`)
+}
+
+func TestPreparePrompt_Empty(t *testing.T) {
+	c := New()
+	c.bin.Reset()
+	c.preparePrompt()
+	args := c.bin.Args()
+	assert.NotContains(t, args, "--system-prompt")
+	assert.NotContains(t, args, "--append-system-prompt")
+	assert.NotContains(t, args, "--permission-mode")
+	assert.NotContains(t, args, "--mcp-config")
+	assert.NotContains(t, args, "--json-schema")
+}
+
+func TestPrepareLimits_MaxTurns(t *testing.T) {
+	c := New().MaxTurns(10)
+	c.bin.Reset()
+	c.prepareLimits()
+	args := c.bin.Args()
+	assert.Contains(t, args, "--max-turns")
+	assert.Contains(t, args, "10")
+}
+
+func TestPrepareLimits_MaxBudget(t *testing.T) {
+	c := New().MaxBudget(5.50)
+	c.bin.Reset()
+	c.prepareLimits()
+	args := c.bin.Args()
+	assert.Contains(t, args, "--max-budget-usd")
+	assert.Contains(t, args, "5.50")
+}
+
+func TestPrepareLimits_Empty(t *testing.T) {
+	c := New()
+	c.bin.Reset()
+	c.prepareLimits()
+	args := c.bin.Args()
+	assert.NotContains(t, args, "--max-turns")
+	assert.NotContains(t, args, "--max-budget-usd")
+}
+
+func TestPrepareTools_AllowedTools(t *testing.T) {
+	c := New().AllowedTools("Read", "Write")
+	c.bin.Reset()
+	c.prepareTools()
+	args := c.bin.Args()
+	assert.Contains(t, args, "--allowedTools")
+	assert.Contains(t, args, "Read")
+	assert.Contains(t, args, "Write")
+}
+
+func TestPrepareTools_DisallowedTools(t *testing.T) {
+	c := New().DisallowedTools("Bash", "Edit")
+	c.bin.Reset()
+	c.prepareTools()
+	args := c.bin.Args()
+	assert.Contains(t, args, "--disallowedTools")
+	assert.Contains(t, args, "Bash")
+	assert.Contains(t, args, "Edit")
+}
+
+func TestPrepareTools_Tools(t *testing.T) {
+	c := New().Tools("Read", "Grep")
+	c.bin.Reset()
+	c.prepareTools()
+	args := c.bin.Args()
+	assert.Contains(t, args, "--tools")
+	assert.Contains(t, args, "Read,Grep")
+}
+
+func TestPrepareTools_AddDirs(t *testing.T) {
+	c := New().AddDirs("/extra1", "/extra2")
+	c.bin.Reset()
+	c.prepareTools()
+	args := c.bin.Args()
+	assert.Contains(t, args, "--add-dir")
+	assert.Contains(t, args, "/extra1")
+	assert.Contains(t, args, "/extra2")
+}
+
+func TestPrepareTools_Empty(t *testing.T) {
+	c := New()
+	c.bin.Reset()
+	c.prepareTools()
+	args := c.bin.Args()
+	assert.NotContains(t, args, "--allowedTools")
+	assert.NotContains(t, args, "--disallowedTools")
+	assert.NotContains(t, args, "--tools")
+	assert.NotContains(t, args, "--add-dir")
+}
+
+func TestPrepareFlags_SkipPermissions(t *testing.T) {
+	c := New()
+	c.SkipPermissions()
+	c.bin.Reset()
+	c.prepareFlags()
+	args := c.bin.Args()
+	assert.Contains(t, args, "--dangerously-skip-permissions")
+}
+
+func TestPrepareFlags_NoPersistence(t *testing.T) {
+	c := New().NoSessionPersistence()
+	c.bin.Reset()
+	c.prepareFlags()
+	args := c.bin.Args()
+	assert.Contains(t, args, "--no-session-persistence")
+}
+
+func TestPrepareFlags_Verbose(t *testing.T) {
+	c := New().Verbose()
+	c.bin.Reset()
+	c.prepareFlags()
+	args := c.bin.Args()
+	assert.Contains(t, args, "--verbose")
+}
+
+func TestPrepareFlags_Empty(t *testing.T) {
+	c := New()
+	c.bin.Reset()
+	c.prepareFlags()
+	args := c.bin.Args()
+	assert.NotContains(t, args, "--dangerously-skip-permissions")
+	assert.NotContains(t, args, "--no-session-persistence")
+	assert.NotContains(t, args, "--verbose")
+}
+
+func TestPrepare_FullConfig(t *testing.T) {
+	c := New().
+		Model("opus").
+		FallbackModel("sonnet").
+		SystemPrompt("sys").
+		PermissionMode("plan").
+		MCPConfig("/mcp.json").
+		JSONSchema("{}").
+		MaxTurns(5).
+		MaxBudget(1.50).
+		AllowedTools("Read").
+		DisallowedTools("Bash").
+		Tools("Read", "Grep").
+		AddDirs("/extra").
+		NoSessionPersistence().
+		Verbose()
+	c.AppendSystemPrompt("extra")
+	c.SkipPermissions()
+	c.Dir("/work")
+	c.outputFormat = formatStreamJSON
+
+	c.prepare("-p")
+
+	args := c.bin.Args()
+	assert.Contains(t, args, "-p")
+	assert.Contains(t, args, "--model")
+	assert.Contains(t, args, "opus")
+	assert.Contains(t, args, "--fallback-model")
+	assert.Contains(t, args, "sonnet")
+	assert.Contains(t, args, "--output-format")
+	assert.Contains(t, args, "stream-json")
+	assert.Contains(t, args, "--system-prompt")
+	assert.Contains(t, args, "--append-system-prompt")
+	assert.Contains(t, args, "--permission-mode")
+	assert.Contains(t, args, "--mcp-config")
+	assert.Contains(t, args, "--json-schema")
+	assert.Contains(t, args, "--max-turns")
+	assert.Contains(t, args, "--max-budget-usd")
+	assert.Contains(t, args, "--allowedTools")
+	assert.Contains(t, args, "--disallowedTools")
+	assert.Contains(t, args, "--tools")
+	assert.Contains(t, args, "--add-dir")
+	assert.Contains(t, args, "--dangerously-skip-permissions")
+	assert.Contains(t, args, "--no-session-persistence")
+	assert.Contains(t, args, "--verbose")
+}
+
+func TestPrepare_ResetsClearsOldArgs(t *testing.T) {
+	c := New().Model("opus")
+	c.outputFormat = formatStreamJSON
+
+	c.prepare("-p")
+	firstArgs := make([]string, len(c.bin.Args()))
+	copy(firstArgs, c.bin.Args())
+
+	c.prepare("-c", "-p")
+	secondArgs := c.bin.Args()
+
+	// Second prepare should have -c but first should not.
+	assert.NotContains(t, firstArgs, "-c")
+	assert.Contains(t, secondArgs, "-c")
+	assert.Contains(t, secondArgs, "-p")
+}
