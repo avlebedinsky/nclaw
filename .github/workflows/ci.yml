@@ -22,6 +22,7 @@ jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -43,6 +44,7 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -64,6 +66,7 @@ jobs:
   docker:
     name: Docker ${{ matrix.variant.name || 'All-in-One' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     needs: [lint, test]
     if: github.event_name == 'push'
     permissions:
@@ -148,6 +151,7 @@ jobs:
   release:
     name: GoReleaser
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: [lint, test]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     permissions:
@@ -174,6 +178,7 @@ jobs:
   chocolatey:
     name: Chocolatey Push
     runs-on: windows-latest
+    timeout-minutes: 10
     needs: [release]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     permissions:
@@ -263,6 +268,7 @@ jobs:
   helm:
     name: Helm Chart Push
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: [docker]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     permissions:
@@ -297,6 +303,7 @@ jobs:
   publish:
     name: Publish Release
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     needs: [release, docker, helm]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     permissions:
