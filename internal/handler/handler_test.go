@@ -24,8 +24,8 @@ import (
 	"github.com/nickalie/nclaw/internal/config"
 	"github.com/nickalie/nclaw/internal/model"
 	"github.com/nickalie/nclaw/internal/pipeline"
-	"github.com/nickalie/nclaw/internal/sendfile"
 	"github.com/nickalie/nclaw/internal/scheduler"
+	"github.com/nickalie/nclaw/internal/sendfile"
 	"github.com/nickalie/nclaw/internal/telegram"
 )
 
@@ -240,8 +240,8 @@ func TestChatDir_WithThread(t *testing.T) {
 
 func TestMessageContent_ForwardedDocumentWithCaption(t *testing.T) {
 	msg := &models.Message{
-		Caption:  "forwarded file caption",
-		Document: &models.Document{FileID: "fwd1", FileUniqueID: "u1", FileName: "report.pdf"},
+		Caption:       "forwarded file caption",
+		Document:      &models.Document{FileID: "fwd1", FileUniqueID: "u1", FileName: "report.pdf"},
 		ForwardOrigin: &models.MessageOrigin{Type: "user"},
 	}
 	text, att := messageContent(msg)
@@ -268,7 +268,7 @@ func TestMessageContent_ForwardedPhotoNoCaption(t *testing.T) {
 
 func TestMessageContent_ForwardedVoice(t *testing.T) {
 	msg := &models.Message{
-		Voice: &models.Voice{FileID: "voice1", FileUniqueID: "vu1", FileSize: 12345},
+		Voice:         &models.Voice{FileID: "voice1", FileUniqueID: "vu1", FileSize: 12345},
 		ForwardOrigin: &models.MessageOrigin{Type: "user"},
 	}
 	text, att := messageContent(msg)
@@ -280,7 +280,7 @@ func TestMessageContent_ForwardedVoice(t *testing.T) {
 
 func TestMessageContent_ForwardedTextOnly(t *testing.T) {
 	msg := &models.Message{
-		Text: "forwarded text message",
+		Text:          "forwarded text message",
 		ForwardOrigin: &models.MessageOrigin{Type: "user"},
 	}
 	text, att := messageContent(msg)
@@ -290,8 +290,8 @@ func TestMessageContent_ForwardedTextOnly(t *testing.T) {
 
 func TestMessageContent_ForwardedVideoWithCaption(t *testing.T) {
 	msg := &models.Message{
-		Caption: "video description",
-		Video:   &models.Video{FileID: "vid1", FileUniqueID: "vu1", FileName: "clip.mp4"},
+		Caption:       "video description",
+		Video:         &models.Video{FileID: "vid1", FileUniqueID: "vu1", FileName: "clip.mp4"},
 		ForwardOrigin: &models.MessageOrigin{Type: "channel"},
 	}
 	text, att := messageContent(msg)
@@ -303,7 +303,7 @@ func TestMessageContent_ForwardedVideoWithCaption(t *testing.T) {
 
 func TestMessageContent_ForwardedAudio(t *testing.T) {
 	msg := &models.Message{
-		Audio: &models.Audio{FileID: "aud1", FileUniqueID: "au1", FileName: "song.mp3"},
+		Audio:         &models.Audio{FileID: "aud1", FileUniqueID: "au1", FileName: "song.mp3"},
 		ForwardOrigin: &models.MessageOrigin{Type: "user"},
 	}
 	text, att := messageContent(msg)
@@ -315,7 +315,7 @@ func TestMessageContent_ForwardedAudio(t *testing.T) {
 
 func TestMessageContent_ForwardedSticker(t *testing.T) {
 	msg := &models.Message{
-		Sticker: &models.Sticker{FileID: "st1", FileUniqueID: "su1"},
+		Sticker:       &models.Sticker{FileID: "st1", FileUniqueID: "su1"},
 		ForwardOrigin: &models.MessageOrigin{Type: "user"},
 	}
 	text, att := messageContent(msg)
@@ -327,8 +327,8 @@ func TestMessageContent_ForwardedSticker(t *testing.T) {
 
 func TestResolveContent_ForwardedDocumentWithCaption(t *testing.T) {
 	msg := &models.Message{
-		Caption:  "see this file",
-		Document: &models.Document{FileID: "fwd1", FileUniqueID: "u1", FileName: "data.csv"},
+		Caption:       "see this file",
+		Document:      &models.Document{FileID: "fwd1", FileUniqueID: "u1", FileName: "data.csv"},
 		ForwardOrigin: &models.MessageOrigin{Type: "user"},
 	}
 	text, att := resolveContent(msg)
@@ -559,8 +559,8 @@ type mockClient struct {
 	lastQuery    string
 }
 
-func (m *mockClient) Dir(dir string) cli.Client          { m.dir = dir; return m }
-func (m *mockClient) SkipPermissions() cli.Client         { m.skipPerms = true; return m }
+func (m *mockClient) Dir(dir string) cli.Client              { m.dir = dir; return m }
+func (m *mockClient) SkipPermissions() cli.Client            { m.skipPerms = true; return m }
 func (m *mockClient) AppendSystemPrompt(p string) cli.Client { m.systemPrompt = p; return m }
 func (m *mockClient) Ask(query string) (*cli.Result, error) {
 	m.lastQuery = query
@@ -577,9 +577,9 @@ type mockProvider struct {
 	name         string
 }
 
-func (m *mockProvider) NewClient() cli.Client          { return m.client }
-func (m *mockProvider) PreInvoke() error               { return m.preInvokeErr }
-func (m *mockProvider) Version() (string, error)       { return "mock-1.0.0", nil }
+func (m *mockProvider) NewClient() cli.Client    { return m.client }
+func (m *mockProvider) PreInvoke() error         { return m.preInvokeErr }
+func (m *mockProvider) Version() (string, error) { return "mock-1.0.0", nil }
 func (m *mockProvider) Name() string {
 	if m.name != "" {
 		return m.name

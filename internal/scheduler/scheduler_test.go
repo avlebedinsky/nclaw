@@ -571,8 +571,8 @@ func TestPauseThenResume(t *testing.T) {
 
 type mockCLIClient struct{}
 
-func (m *mockCLIClient) Dir(_ string) cli.Client              { return m }
-func (m *mockCLIClient) SkipPermissions() cli.Client           { return m }
+func (m *mockCLIClient) Dir(_ string) cli.Client                { return m }
+func (m *mockCLIClient) SkipPermissions() cli.Client            { return m }
 func (m *mockCLIClient) AppendSystemPrompt(_ string) cli.Client { return m }
 
 func (m *mockCLIClient) Ask(_ string) (*cli.Result, error) {
@@ -585,10 +585,10 @@ func (m *mockCLIClient) Continue(_ string) (*cli.Result, error) {
 
 type mockCLIProvider struct{}
 
-func (m *mockCLIProvider) NewClient() cli.Client       { return &mockCLIClient{} }
-func (m *mockCLIProvider) PreInvoke() error            { return nil }
-func (m *mockCLIProvider) Version() (string, error)    { return "mock-cli-1.0.0", nil }
-func (m *mockCLIProvider) Name() string                { return "mock-cli" }
+func (m *mockCLIProvider) NewClient() cli.Client    { return &mockCLIClient{} }
+func (m *mockCLIProvider) PreInvoke() error         { return nil }
+func (m *mockCLIProvider) Version() (string, error) { return "mock-cli-1.0.0", nil }
+func (m *mockCLIProvider) Name() string             { return "mock-cli" }
 
 func setupTestSchedulerWithMockCLI(t *testing.T) *Scheduler {
 	t.Helper()
