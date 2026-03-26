@@ -219,6 +219,134 @@ func TestChatDir_WithThread(t *testing.T) {
 	assert.Equal(t, "/data/12345/99", dir)
 }
 
+// Forwarded message tests: verify files and text are correctly extracted from forwarded messages.
+
+func TestMessageContent_ForwardedDocumentWithCaption(t *testing.T) {
+	msg := &models.Message{
+		Caption:  "forwarded file caption",
+		Document: &models.Document{FileID: "fwd1", FileUniqueID: "u1", FileName: "report.pdf"},
+		ForwardOrigin: &models.MessageOrigin{Type: "user"},
+	}
+	text, att := messageContent(msg)
+	assert.Equal(t, "forwarded file caption", text)
+	assert.NotNil(t, att)
+	assert.Equal(t, "fwd1", att.fileID)
+	assert.Equal(t, "report.pdf", att.filename)
+}
+
+func TestMessageContent_ForwardedPhotoNoCaption(t *testing.T) {
+	msg := &models.Message{
+		Photo: []models.PhotoSize{
+			{FileID: "small", FileUniqueID: "us", Width: 100, Height: 100},
+			{FileID: "large", FileUniqueID: "ul", Width: 800, Height: 800},
+		},
+		ForwardOrigin: &models.MessageOrigin{Type: "channel"},
+	}
+	text, att := messageContent(msg)
+	assert.Empty(t, text)
+	assert.NotNil(t, att)
+	assert.Equal(t, "large", att.fileID)
+	assert.Equal(t, "photo.jpg", att.filename)
+}
+
+func TestMessageContent_ForwardedVoice(t *testing.T) {
+	msg := &models.Message{
+		Voice: &models.Voice{FileID: "voice1", FileUniqueID: "vu1", FileSize: 12345},
+		ForwardOrigin: &models.MessageOrigin{Type: "user"},
+	}
+	text, att := messageContent(msg)
+	assert.Empty(t, text)
+	assert.NotNil(t, att)
+	assert.Equal(t, "voice1", att.fileID)
+	assert.Equal(t, "voice.ogg", att.filename)
+}
+
+func TestMessageContent_ForwardedTextOnly(t *testing.T) {
+	msg := &models.Message{
+		Text: "forwarded text message",
+		ForwardOrigin: &models.MessageOrigin{Type: "user"},
+	}
+	text, att := messageContent(msg)
+	assert.Equal(t, "forwarded text message", text)
+	assert.Nil(t, att)
+}
+
+func TestMessageContent_ForwardedVideoWithCaption(t *testing.T) {
+	msg := &models.Message{
+		Caption: "video description",
+		Video:   &models.Video{FileID: "vid1", FileUniqueID: "vu1", FileName: "clip.mp4"},
+		ForwardOrigin: &models.MessageOrigin{Type: "channel"},
+	}
+	text, att := messageContent(msg)
+	assert.Equal(t, "video description", text)
+	assert.NotNil(t, att)
+	assert.Equal(t, "vid1", att.fileID)
+	assert.Equal(t, "clip.mp4", att.filename)
+}
+
+func TestMessageContent_ForwardedAudio(t *testing.T) {
+	msg := &models.Message{
+		Audio: &models.Audio{FileID: "aud1", FileUniqueID: "au1", FileName: "song.mp3"},
+		ForwardOrigin: &models.MessageOrigin{Type: "user"},
+	}
+	text, att := messageContent(msg)
+	assert.Empty(t, text)
+	assert.NotNil(t, att)
+	assert.Equal(t, "aud1", att.fileID)
+	assert.Equal(t, "song.mp3", att.filename)
+}
+
+func TestMessageContent_ForwardedSticker(t *testing.T) {
+	msg := &models.Message{
+		Sticker: &models.Sticker{FileID: "st1", FileUniqueID: "su1"},
+		ForwardOrigin: &models.MessageOrigin{Type: "user"},
+	}
+	text, att := messageContent(msg)
+	assert.Empty(t, text)
+	assert.NotNil(t, att)
+	assert.Equal(t, "st1", att.fileID)
+	assert.Equal(t, "sticker.webp", att.filename)
+}
+
+func TestResolveContent_ForwardedDocumentWithCaption(t *testing.T) {
+	msg := &models.Message{
+		Caption:  "see this file",
+		Document: &models.Document{FileID: "fwd1", FileUniqueID: "u1", FileName: "data.csv"},
+		ForwardOrigin: &models.MessageOrigin{Type: "user"},
+	}
+	text, att := resolveContent(msg)
+	assert.Equal(t, "see this file", text)
+	assert.NotNil(t, att)
+	assert.Equal(t, "data.csv", att.filename)
+}
+
+func TestResolveContent_ForwardedPhotoReplyFallback(t *testing.T) {
+	// User sends text as reply to a forwarded photo — attachment extracted from reply.
+	msg := &models.Message{
+		Text: "what is this?",
+		ReplyToMessage: &models.Message{
+			Photo: []models.PhotoSize{
+				{FileID: "p1", FileUniqueID: "pu1", Width: 800, Height: 600},
+			},
+			ForwardOrigin: &models.MessageOrigin{Type: "channel"},
+		},
+	}
+	text, att := resolveContent(msg)
+	assert.Equal(t, "what is this?", text)
+	assert.NotNil(t, att)
+	assert.Equal(t, "p1", att.fileID)
+}
+
+func TestMessageContent_CaptionWithoutAttachment(t *testing.T) {
+	// Edge case: Caption field set but no media (shouldn't happen in Telegram, but test robustness).
+	msg := &models.Message{
+		Caption: "orphan caption",
+	}
+	text, att := messageContent(msg)
+	assert.Equal(t, "orphan caption", text)
+	assert.Nil(t, att)
+}
+
 func TestBuildPrompt_NoAttachment(t *testing.T) {
 	result := buildPrompt(context.TODO(), nil, "just text", nil, "/tmp")
 	assert.Equal(t, "just text", result)

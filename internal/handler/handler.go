@@ -103,11 +103,13 @@ func withReplyContext(msg *models.Message, text string) string {
 }
 
 // messageContent extracts the user text and optional attachment from a message.
+// For regular text messages, Text is populated. For media messages (including
+// forwarded ones), Caption holds the text while Text is empty.
 func messageContent(msg *models.Message) (string, *attachment) {
 	att := extractAttachment(msg)
 
 	text := msg.Text
-	if att != nil && text == "" {
+	if text == "" {
 		text = msg.Caption
 	}
 
