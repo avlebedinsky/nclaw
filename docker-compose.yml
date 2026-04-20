@@ -15,5 +15,6 @@ services:
       - ${CLAUDE_CREDENTIALS_PATH}:/root/.claude/.credentials.json
       - ${CLAUDE_SKILLS_PATH:-./claude-skills}:/root/.claude/skills
       - ${AGENTS_PATH:-./agents}:/root/.agents
+      - ${CLAUDE_CONFIG_PATH:-./claude-config}:/root/.claude/backups
     # ports:
     #   - "3000:3000"  # Uncomment if using webhooks
