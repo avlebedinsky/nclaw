@@ -3,19 +3,23 @@ package copilot
 import "github.com/nickalie/nclaw/internal/cli"
 
 // Provider implements cli.Provider for the GitHub Copilot CLI backend.
-type Provider struct{}
+type Provider struct {
+	model string
+}
 
 // Compile-time check: *Provider implements cli.Provider.
 var _ cli.Provider = (*Provider)(nil)
 
 // NewProvider creates a new Copilot CLI provider.
-func NewProvider() *Provider {
-	return &Provider{}
+func NewProvider(model string) *Provider {
+	return &Provider{model: model}
 }
 
 // NewClient creates a new Copilot CLI client.
 func (p *Provider) NewClient() cli.Client {
-	return New()
+	c := New()
+	c.model = p.model
+	return c
 }
 
 // PreInvoke is a no-op for Copilot (no token refresh needed).

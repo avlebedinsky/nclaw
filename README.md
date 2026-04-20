@@ -229,6 +229,7 @@ docker run -d --name nclaw \
   -e NCLAW_TELEGRAM_WHITELIST_CHAT_IDS=your-chat-id \
   -e NCLAW_DATA_DIR=/app/data \
   -e NCLAW_CLI=copilot \
+  -e NCLAW_COPILOT_MODEL=gpt-4.1 \
   -v ./data:/app/data \
   -v ~/.copilot/config.json:/root/.copilot/config.json:ro \
   ghcr.io/nickalie/nclaw:copilot
@@ -525,6 +526,7 @@ NClaw variables use the `NCLAW_` prefix. Provider API keys use the provider's na
 | `NCLAW_DATA_DIR` | Yes | — | Base directory for session data and files |
 | `NCLAW_CLI` | No | `claude` | CLI agent: `claude`, `claudish` (multi-model), `codex`, `copilot`, or `gemini`. Auto-selects `claudish` when `NCLAW_MODEL` is set |
 | `NCLAW_MODEL` | No | — | Model for multi-model backend (e.g. `g@gemini-2.5-pro`). Setting this auto-selects multi-model |
+| `NCLAW_COPILOT_MODEL` | No | — | Model for Copilot backend (e.g. `gpt-4.1`). Only used when `NCLAW_CLI=copilot` |
 | `NCLAW_TELEGRAM_WHITELIST_CHAT_IDS` | No | — | Comma-separated list of allowed Telegram chat IDs. If unset, accepts all chats (with a security warning) |
 | `NCLAW_DB_PATH` | No | `{data_dir}/nclaw.db` | Path to the SQLite database |
 | `NCLAW_TIMEZONE` | No | system local | Timezone for the scheduler (e.g. `Europe/Berlin`) |
@@ -551,6 +553,9 @@ timezone: "Europe/Berlin"
 model: ""                  # e.g. "g@gemini-2.5-pro", "or@mistralai/mistral-large"
 # Provider API keys are set as regular env vars (not in this file):
 # OPENROUTER_API_KEY, GEMINI_API_KEY, OPENAI_API_KEY, etc.
+
+# Copilot-specific settings (only used when cli: copilot)
+copilot_model: ""          # e.g. "gpt-4.1"
 
 webhook:
   base_domain: "example.com"

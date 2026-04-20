@@ -169,7 +169,7 @@ func newProvider(backend string) (cli.Provider, error) {
 	case "codex":
 		return codex.NewProvider(), nil
 	case "copilot":
-		return copilot.NewProvider(), nil
+		return copilot.NewProvider(config.CopilotModel()), nil
 	case "gemini":
 		return gemini.NewProvider(), nil
 	default:

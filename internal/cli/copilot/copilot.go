@@ -13,10 +13,14 @@ import (
 // Compile-time check: *Copilot implements cli.Client.
 var _ cli.Client = (*Copilot)(nil)
 
+// sessionIDFile is the filename used to persist the Copilot session ID in the chat directory.
+const sessionIDFile = ".copilot-session-id"
+
 // Copilot wraps the GitHub Copilot CLI binary.
 type Copilot struct {
 	bin             *binwrapper.BinWrapper
 	dir             string
+	model           string
 	systemPrompt    string
 	skipPermissions bool
 }
@@ -36,7 +40,7 @@ func (c *Copilot) Dir(dir string) cli.Client {
 	return c
 }
 
-// SkipPermissions enables allow-all-tools and no-ask-user flags.
+// SkipPermissions enables --allow-all, --no-ask-user, and --autopilot flags.
 func (c *Copilot) SkipPermissions() cli.Client {
 	c.skipPermissions = true
 	return c
@@ -49,7 +53,7 @@ func (c *Copilot) AppendSystemPrompt(prompt string) cli.Client {
 	return c
 }
 
-// Ask sends a query and returns the plain text response.
+// Ask sends a query and returns the structured response.
 func (c *Copilot) Ask(query string) (*cli.Result, error) {
 	if err := c.writeSystemPrompt(); err != nil {
 		return &cli.Result{}, fmt.Errorf("copilot: write system prompt: %w", err)
@@ -59,7 +63,9 @@ func (c *Copilot) Ask(query string) (*cli.Result, error) {
 	return c.runAndParse(query)
 }
 
-// Continue sends a query resuming the most recent session.
+// Continue sends a query resuming the session.
+// It uses --resume=SESSION-ID when a session ID is persisted in the chat directory,
+// falling back to --continue (most recent session) otherwise.
 func (c *Copilot) Continue(query string) (*cli.Result, error) {
 	if err := c.writeSystemPrompt(); err != nil {
 		return &cli.Result{}, fmt.Errorf("copilot: write system prompt: %w", err)
@@ -69,16 +75,25 @@ func (c *Copilot) Continue(query string) (*cli.Result, error) {
 	return c.runAndParse(query)
 }
 
-// runAndParse executes the CLI and returns plain text output as a Result.
-// Copilot's -s flag outputs only the final text, so Text == FullText.
+// runAndParse executes the CLI and parses JSONL output into a Result.
+// The session ID from the result event is persisted for future Continue() calls.
 func (c *Copilot) runAndParse(query string) (*cli.Result, error) {
 	if err := c.bin.Run(query); err != nil {
-		text := strings.TrimSpace(string(c.bin.CombinedOutput()))
-		return &cli.Result{Text: text, FullText: text}, fmt.Errorf("copilot: %w", err)
+		parsed := parseJSONOutput(c.bin.StdOut())
+		if parsed.result.Text == "" && parsed.result.FullText == "" {
+			text := strings.TrimSpace(string(c.bin.CombinedOutput()))
+			parsed.result = &cli.Result{Text: text, FullText: text}
+		}
+
+		c.saveSessionID(parsed.sessionID)
+
+		return parsed.result, fmt.Errorf("copilot: %w", err)
 	}
 
-	text := strings.TrimSpace(string(c.bin.StdOut()))
-	return &cli.Result{Text: text, FullText: text}, nil
+	parsed := parseJSONOutput(c.bin.StdOut())
+	c.saveSessionID(parsed.sessionID)
+
+	return parsed.result, nil
 }
 
 // Version returns the Copilot CLI version string.
@@ -115,9 +130,14 @@ func (c *Copilot) prepare() {
 }
 
 // prepareContinue resets the binwrapper and rebuilds arguments for a Continue call.
+// Uses --resume=SESSION-ID when a session ID is available, --continue otherwise.
 func (c *Copilot) prepareContinue() {
 	c.bin.Reset()
-	c.bin.Arg("--continue")
+	if id := c.loadSessionID(); id != "" {
+		c.bin.Arg("--resume=" + id)
+	} else {
+		c.bin.Arg("--continue")
+	}
 	c.addCommonArgs()
 }
 
@@ -127,13 +147,46 @@ func (c *Copilot) addCommonArgs() {
 		c.bin.Dir(c.dir)
 	}
 
-	// Silent mode: output only final text.
+	// Silent mode: suppress stats, output only the agent response.
 	c.bin.Arg("-s")
 
+	// Structured JSONL output for proper message parsing.
+	c.bin.Arg("--output-format=json")
+
+	if c.model != "" {
+		c.bin.Arg("--model=" + c.model)
+	}
+
 	if c.skipPermissions {
-		c.bin.Arg("--allow-all-tools")
+		// --allow-all covers tools, paths, and URLs; --no-ask-user disables
+		// the ask_user tool; --autopilot enables autonomous multi-turn continuation.
+		c.bin.Arg("--allow-all")
 		c.bin.Arg("--no-ask-user")
+		c.bin.Arg("--autopilot")
 	}
 
 	c.bin.Arg("-p")
+}
+
+// loadSessionID reads the persisted session ID from the chat directory.
+func (c *Copilot) loadSessionID() string {
+	if c.dir == "" {
+		return ""
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.dir, sessionIDFile))
+	if err != nil {
+		return ""
+	}
+
+	return strings.TrimSpace(string(data))
+}
+
+// saveSessionID persists the session ID to the chat directory.
+func (c *Copilot) saveSessionID(id string) {
+	if c.dir == "" || id == "" {
+		return
+	}
+
+	_ = os.WriteFile(filepath.Join(c.dir, sessionIDFile), []byte(id), 0o644)
 }

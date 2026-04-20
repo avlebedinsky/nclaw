@@ -41,7 +41,7 @@ All CLI backends implement two interfaces: `cli.Client` (per-request builder wit
 - **Claude** (`internal/claude/`): Stream-json output parsing via shared `streamjson` package. Claude-specific methods (`Model`, `FallbackModel`, `Resume`) remain on the concrete `*Claude` type. `PreInvoke()` handles OAuth token refresh.
 - **Claudish** (`internal/cli/claudish/`): Wraps Claude Code via [claudish](https://github.com/MadAppGang/claudish), proxying API calls to alternative providers (OpenRouter, Gemini, OpenAI, Ollama, LM Studio, etc.). Uses the same stream-json output format as Claude, parsed via the shared `streamjson` package. Passes model config (`--model` flag) and model tier overrides (`CLAUDISH_MODEL_OPUS/SONNET/HAIKU/SUBAGENT`) as environment variables. Provider API keys (e.g. `OPENROUTER_API_KEY`, `GEMINI_API_KEY`) pass through from the OS environment. `PreInvoke()` is a no-op.
 - **Codex** (`internal/codex/`): JSONL event parsing (`item.completed` with `type: "agent_message"`). System prompt written to `AGENTS.md` in the working directory.
-- **Copilot** (`internal/copilot/`): Plain text output via `-s` flag (`Text == FullText`). System prompt written to `.github/copilot-instructions.md`. Known limitation: no structured output, so command blocks in intermediate messages are not captured.
+- **Copilot** (`internal/cli/copilot/`): JSONL output parsing via `--output-format=json` flag (`assistant.message` events and `result` for session ID). Session ID tracked per-chat via `.copilot-session-id` file for reliable `--resume` across concurrent chats. `--allow-all`, `--no-ask-user`, `--autopilot` in skip-permissions mode. Optional `--model=MODEL` via `NCLAW_COPILOT_MODEL`. System prompt written to `.github/copilot-instructions.md`. `PreInvoke()` is a no-op.
 - **Gemini** (`internal/cli/gemini/`): NDJSON stream-json output parsing (`--output-format stream-json`) with its own event types (message, tool_use, tool_result, error, result). System prompt written to `GEMINI.md` in the working directory. Uses `--approval-mode yolo` for auto-approve. `PreInvoke()` is a no-op.
 
 ### OAuth Token Refresh
@@ -82,6 +82,7 @@ Optional:
 - `NCLAW_MODEL_SONNET` - Claudish Sonnet-tier model override
 - `NCLAW_MODEL_HAIKU` - Claudish Haiku-tier model override
 - `NCLAW_MODEL_SUBAGENT` - Claudish subagent model override
+- `NCLAW_COPILOT_MODEL` - Model for Copilot backend (e.g. `gpt-4.1`)
 - `NCLAW_TELEGRAM_WHITELIST_CHAT_IDS` - Comma-separated list of allowed Telegram chat IDs (if unset, bot accepts all chats with a security warning)
 - `NCLAW_DB_PATH` - SQLite path (default: `{data_dir}/nclaw.db`)
 - `NCLAW_TIMEZONE` - Timezone for scheduler (default: system local)

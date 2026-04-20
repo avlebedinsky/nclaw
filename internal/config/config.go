@@ -144,6 +144,11 @@ func ModelSubagent() string {
 	return viper.GetString("model_subagent")
 }
 
+// CopilotModel returns the model for the Copilot CLI backend (env: NCLAW_COPILOT_MODEL).
+func CopilotModel() string {
+	return viper.GetString("copilot_model")
+}
+
 // Timezone returns the configured timezone name, defaulting to system local.
 func Timezone() string {
 	if tz := viper.GetString("timezone"); tz != "" {
