@@ -34,6 +34,7 @@ RUN apk add --no-cache \
     nss \
     freetype \
     ttf-freefont \
+    tzdata \
     font-noto-emoji \
     gcompat \
     python3 \
