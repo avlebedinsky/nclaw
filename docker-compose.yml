@@ -3,21 +3,13 @@ services:
     image: ghcr.io/avlebedinsky/nclaw:${NCLAW_IMAGE_TAG:-claude}
     container_name: nclaw
     restart: unless-stopped
+    env_file: .env
     environment:
-      NCLAW_TELEGRAM_BOT_TOKEN: ${NCLAW_TELEGRAM_BOT_TOKEN}
-      NCLAW_TELEGRAM_WHITELIST_CHAT_IDS: ${NCLAW_TELEGRAM_WHITELIST_CHAT_IDS}
       NCLAW_DATA_DIR: /app/data
-      NCLAW_TIMEZONE: Europe/Moscow
-      TZ: Europe/Moscow
+      NCLAW_TIMEZONE: ${NCLAW_TIMEZONE:-Europe/Moscow}
+      TZ: ${NCLAW_TIMEZONE:-Europe/Moscow}
       # NCLAW_WEBHOOK_BASE_DOMAIN: example.com
       # NCLAW_WEBHOOK_PORT: :3000
-      RUTRACKER_USER: ${RUTRACKER_USER}
-      RUTRACKER_PASS: ${RUTRACKER_PASS}
-      OLLAMA_API_KEY: ${OLLAMA_API_KEY}
-      GROQ_API_KEY: ${GROQ_API_KEY}
-      TAVILY_API_KEY: ${TAVILY_API_KEY}
-      HTTP_PROXY: ${HTTP_PROXY}
-      HTTPS_PROXY: ${HTTP_PROXY}
     volumes:
       - ./data:/app/data
       - ${CLAUDE_CREDENTIALS_PATH}:/root/.claude/.credentials.json
