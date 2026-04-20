@@ -12,6 +12,7 @@
   - [Step 2: Find Your Chat ID](#step-2-find-your-chat-id)
   - [Step 3: Run NClaw](#step-3-run-nclaw)
 - [Docker](#docker)
+  - [Docker Compose](#docker-compose)
 - [Multi-Model](#multi-model-1)
 - [Kubernetes (Helm)](#kubernetes-helm)
 - [Running without Docker](#running-without-docker)
@@ -281,6 +282,47 @@ docker run -d --name nclaw \
   -v ./data:/app/data \
   -v ~/.claude/.credentials.json:/root/.claude/.credentials.json \
   ghcr.io/nickalie/nclaw:latest
+```
+
+### Docker Compose
+
+A `docker-compose.yml` is included in the repository for a quick self-hosted setup.
+
+1. Copy `.env` and fill in your values:
+
+   ```env
+   NCLAW_TELEGRAM_BOT_TOKEN=your-token
+   NCLAW_TELEGRAM_WHITELIST_CHAT_IDS=123456789
+
+   # Image tag: claude (default), multi-model, codex, copilot, gemini, latest
+   # NCLAW_IMAGE_TAG=claude
+
+   # Path to Claude Code credentials
+   # Windows: C:/Users/<username>/.claude/.credentials.json
+   # Linux/Mac: /home/<username>/.claude/.credentials.json
+   CLAUDE_CREDENTIALS_PATH=/home/<username>/.claude/.credentials.json
+
+   # Skills persistence (optional — these are the defaults)
+   # CLAUDE_SKILLS_PATH=./claude-skills
+   # AGENTS_PATH=./agents
+
+   # Proxy (optional)
+   # HTTP_PROXY=http://user:pass@host:port
+   ```
+
+2. Start:
+
+   ```bash
+   docker compose up -d
+   ```
+
+**Management:**
+
+```bash
+docker compose up -d      # Start / apply config changes
+docker compose down       # Stop
+docker compose restart    # Restart
+docker logs nclaw -f      # Follow logs
 ```
 
 ## Multi-Model
