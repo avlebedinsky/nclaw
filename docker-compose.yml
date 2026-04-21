@@ -16,5 +16,6 @@ services:
       - ${CLAUDE_SKILLS_PATH:-./claude-skills}:/root/.claude/skills
       - ${AGENTS_PATH:-./agents}:/root/.agents
       - ${CLAUDE_CONFIG_PATH:-./claude-config}:/root/.claude/backups
+      - ${COPILOT_CONFIG_PATH:-./copilot}:/root/.copilot
     # ports:
     #   - "3000:3000"  # Uncomment if using webhooks
