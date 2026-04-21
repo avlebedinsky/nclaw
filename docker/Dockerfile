@@ -18,6 +18,26 @@ RUN go build -ldflags "\
     -X github.com/nickalie/nclaw/internal/version.DockerTag=${DOCKER_TAG}" \
     -o nclaw ./cmd/nclaw
 
+FROM golang:1.25 AS builder-glibc
+
+RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev && rm -rf /var/lib/apt/lists/*
+WORKDIR /build
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+ARG VERSION=dev
+ARG COMMIT=unknown
+ARG BUILD_DATE=unknown
+ARG BUILD_NUMBER=
+ARG DOCKER_TAG=
+RUN go build -ldflags "\
+    -X github.com/nickalie/nclaw/internal/version.Version=${VERSION} \
+    -X github.com/nickalie/nclaw/internal/version.Commit=${COMMIT} \
+    -X github.com/nickalie/nclaw/internal/version.BuildDate=${BUILD_DATE} \
+    -X github.com/nickalie/nclaw/internal/version.BuildNumber=${BUILD_NUMBER} \
+    -X github.com/nickalie/nclaw/internal/version.DockerTag=${DOCKER_TAG}" \
+    -o nclaw ./cmd/nclaw
+
 # ---------- shared base ----------
 FROM node:24-alpine AS base
 
@@ -93,8 +113,8 @@ FROM node:24-slim AS copilot-base
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git bash curl openssh-client \
     && rm -rf /var/lib/apt/lists/*
-COPY --from=builder /usr/local/go /usr/local/go
-COPY --from=builder /build/nclaw /usr/local/bin/nclaw
+COPY --from=builder-glibc /usr/local/go /usr/local/go
+COPY --from=builder-glibc /build/nclaw /usr/local/bin/nclaw
 ENV PATH="/root/.local/bin:/usr/local/go/bin:${PATH}"
 ENV NCLAW_DATA_DIR=/app/data
 WORKDIR /app
