@@ -110,9 +110,18 @@ RUN mkdir -p /root/.codex/skills && \
 
 # ---------- copilot ----------
 FROM node:24-slim AS copilot-base
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git bash curl openssh-client ca-certificates \
+    gh python3 python3-pip pipx tzdata \
     && rm -rf /var/lib/apt/lists/*
+
+ENV IS_SANDBOX=1
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+
+# Install uv
+RUN curl -LsSf https://astral.sh/uv/install.sh | bash
+
 COPY --from=builder-glibc /usr/local/go /usr/local/go
 COPY --from=builder-glibc /build/nclaw /usr/local/bin/nclaw
 ENV PATH="/root/.local/bin:/usr/local/go/bin:${PATH}"
@@ -123,8 +132,9 @@ ENTRYPOINT ["nclaw"]
 FROM copilot-base AS copilot
 RUN npm install -g @github/copilot
 COPY --from=base /opt/nclaw-skills /opt/nclaw-skills
-RUN mkdir -p /root/.copilot/skills && \
-    cp -r /opt/nclaw-skills/* /root/.copilot/skills/
+RUN mkdir -p /root/.claude/skills && \
+    cp -r /opt/nclaw-skills/* /root/.claude/skills/ && \
+    ln -s /root/.claude/skills /root/.copilot/skills
 
 # ---------- gemini ----------
 FROM base AS gemini
