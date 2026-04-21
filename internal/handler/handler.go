@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"slices"
 	"time"
 
@@ -139,6 +140,13 @@ func buildPrompt(ctx context.Context, b *bot.Bot, text string, att *attachment, 
 func (h *Handler) callCLI(dir, prompt string, chatID int64, threadID int) (*cli.Result, error) {
 	taskPrompt := h.Scheduler.FormatTaskList(chatID, threadID)
 	systemPrompt := telegram.Prompt + "\n\n" + taskPrompt
+
+	if h.Provider.Name() != "claude" && h.Provider.Name() != "claudish" {
+		skillsDir := filepath.Join(os.Getenv("HOME"), ".claude", "skills")
+		if skills := loadSkillsPrompt(skillsDir); skills != "" {
+			systemPrompt += "\n\n" + skills
+		}
+	}
 
 	if err := h.Provider.PreInvoke(); err != nil {
 		log.Printf("handler: pre-invoke warning: %v", err)
