@@ -90,8 +90,7 @@ RUN mkdir -p /root/.codex/skills && \
 
 # ---------- copilot ----------
 FROM base AS copilot
-RUN npm install -g @githubnext/github-copilot-cli && \
-    ln -s /usr/local/bin/github-copilot-cli /usr/local/bin/copilot
+RUN npm install -g @github/copilot
 RUN mkdir -p /root/.copilot/skills && \
     cp -r /root/.claude/skills/* /root/.copilot/skills/ && \
     cp -r /opt/nclaw-skills/* /root/.copilot/skills/
