@@ -89,10 +89,21 @@ RUN mkdir -p /root/.codex/skills && \
     cp -r /opt/nclaw-skills/* /root/.codex/skills/
 
 # ---------- copilot ----------
-FROM base AS copilot
+FROM node:24-slim AS copilot-base
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git bash curl openssh-client \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /usr/local/go /usr/local/go
+COPY --from=builder /build/nclaw /usr/local/bin/nclaw
+ENV PATH="/root/.local/bin:/usr/local/go/bin:${PATH}"
+ENV NCLAW_DATA_DIR=/app/data
+WORKDIR /app
+ENTRYPOINT ["nclaw"]
+
+FROM copilot-base AS copilot
 RUN npm install -g @github/copilot
+COPY --from=base /opt/nclaw-skills /opt/nclaw-skills
 RUN mkdir -p /root/.copilot/skills && \
-    cp -r /root/.claude/skills/* /root/.copilot/skills/ && \
     cp -r /opt/nclaw-skills/* /root/.copilot/skills/
 
 # ---------- gemini ----------
