@@ -132,7 +132,7 @@ ENTRYPOINT ["nclaw"]
 FROM copilot-base AS copilot
 RUN npm install -g @github/copilot
 COPY --from=base /opt/nclaw-skills /opt/nclaw-skills
-RUN mkdir -p /root/.claude/skills && \
+RUN mkdir -p /root/.claude/skills /root/.copilot && \
     cp -r /opt/nclaw-skills/* /root/.claude/skills/ && \
     ln -s /root/.claude/skills /root/.copilot/skills
 
