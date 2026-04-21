@@ -111,7 +111,7 @@ RUN mkdir -p /root/.codex/skills && \
 # ---------- copilot ----------
 FROM node:24-slim AS copilot-base
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git bash curl openssh-client \
+    git bash curl openssh-client ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=builder-glibc /usr/local/go /usr/local/go
 COPY --from=builder-glibc /build/nclaw /usr/local/bin/nclaw
