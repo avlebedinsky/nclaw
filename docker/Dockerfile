@@ -130,7 +130,8 @@ WORKDIR /app
 ENTRYPOINT ["nclaw"]
 
 FROM copilot-base AS copilot
-RUN npm install -g @github/copilot
+ARG BUILD_DATE=unknown
+RUN echo "copilot install at ${BUILD_DATE}" && npm install -g @github/copilot@latest
 COPY --from=base /opt/nclaw-skills /opt/nclaw-skills
 RUN mkdir -p /root/.claude/skills /root/.copilot && \
     cp -r /opt/nclaw-skills/* /root/.claude/skills/ && \
