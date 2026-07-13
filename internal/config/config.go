@@ -81,6 +81,14 @@ func DBPath() string {
 	return filepath.Join(DataDir(), "nclaw.db")
 }
 
+// MaxSessionBytes returns the Claude Code session transcript size (in bytes)
+// past which nclaw archives the session and starts a fresh conversation for
+// that chat/thread on the next message. 0 (the default) disables automatic
+// session resetting.
+func MaxSessionBytes() int64 {
+	return viper.GetInt64("max_session_bytes")
+}
+
 // WebhookBaseDomain returns the configured base domain for webhook URLs.
 func WebhookBaseDomain() string {
 	return viper.GetString("webhook.base_domain")

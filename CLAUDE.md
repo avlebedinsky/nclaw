@@ -85,6 +85,7 @@ Optional:
 - `NCLAW_COPILOT_MODEL` - Model for Copilot backend (e.g. `gpt-4.1`)
 - `NCLAW_TELEGRAM_WHITELIST_CHAT_IDS` - Comma-separated list of allowed Telegram chat IDs (if unset, bot accepts all chats with a security warning)
 - `NCLAW_DB_PATH` - SQLite path (default: `{data_dir}/nclaw.db`)
+- `NCLAW_MAX_SESSION_BYTES` - Claude Code session transcript size (bytes) past which the session is archived and restarted fresh on the next message (default: `0`, disabled). Only applies to `claude`/`claudish` backends
 - `NCLAW_TIMEZONE` - Timezone for scheduler (default: system local)
 - `NCLAW_WEBHOOK_BASE_DOMAIN` - Base domain for webhook URLs (required when webhooks enabled)
 - `NCLAW_WEBHOOK_PORT` - Webhook HTTP server listen address (default: `:3000`)

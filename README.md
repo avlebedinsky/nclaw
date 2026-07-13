@@ -571,6 +571,7 @@ NClaw variables use the `NCLAW_` prefix. Provider API keys use the provider's na
 | `NCLAW_COPILOT_MODEL` | No | — | Model for Copilot backend (e.g. `gpt-4.1`). Only used when `NCLAW_CLI=copilot` |
 | `NCLAW_TELEGRAM_WHITELIST_CHAT_IDS` | No | — | Comma-separated list of allowed Telegram chat IDs. If unset, accepts all chats (with a security warning) |
 | `NCLAW_DB_PATH` | No | `{data_dir}/nclaw.db` | Path to the SQLite database |
+| `NCLAW_MAX_SESSION_BYTES` | No | `0` (disabled) | Claude Code session transcript size (bytes) past which nclaw archives the session and starts a fresh conversation for that chat/thread on the next message. Only applies to the `claude`/`claudish` backends |
 | `NCLAW_TIMEZONE` | No | system local | Timezone for the scheduler (e.g. `Europe/Berlin`) |
 | `NCLAW_WEBHOOK_BASE_DOMAIN` | No | — | Base domain for webhook URLs (required when using webhooks) |
 | `NCLAW_WEBHOOK_PORT` | No | `:3000` | Webhook HTTP server listen address |

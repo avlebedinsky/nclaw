@@ -152,6 +152,8 @@ func (h *Handler) callCLI(dir, prompt string, chatID int64, threadID int) (*cli.
 		log.Printf("handler: pre-invoke warning: %v", err)
 	}
 
+	h.maybeResetSession(dir)
+
 	log.Printf("handler: calling %s Continue in dir=%s", h.Provider.Name(), dir)
 	result, err := h.Provider.NewClient().Dir(dir).SkipPermissions().AppendSystemPrompt(systemPrompt).Continue(prompt)
 
@@ -163,6 +165,41 @@ func (h *Handler) callCLI(dir, prompt string, chatID int64, threadID int) (*cli.
 	}
 
 	return result, err
+}
+
+// maybeResetSession archives the Claude Code session transcript for dir
+// when it has grown past config.MaxSessionBytes(), so the next message
+// starts a fresh conversation instead of risking a long-context billing
+// error ("Usage credits are required for long context requests"). Only
+// applies to the claude/claudish backends, which share Claude Code's
+// on-disk session format; other backends are left untouched.
+func (h *Handler) maybeResetSession(dir string) {
+	name := h.Provider.Name()
+	if name != "claude" && name != "claudish" {
+		return
+	}
+
+	maxBytes := config.MaxSessionBytes()
+	if maxBytes <= 0 {
+		return
+	}
+
+	projectsDir, err := claudeProjectsDir()
+	if err != nil {
+		return
+	}
+
+	size, ok := claudeSessionSize(projectsDir, dir)
+	if !ok || size < maxBytes {
+		return
+	}
+
+	if err := resetClaudeSession(projectsDir, dir); err != nil {
+		log.Printf("handler: failed to reset oversized session in dir=%s: %v", dir, err)
+		return
+	}
+
+	log.Printf("handler: reset session in dir=%s (was %d bytes, threshold %d bytes)", dir, size, maxBytes)
 }
 
 func sendTyping(ctx context.Context, b *bot.Bot, chatID int64, threadID int) {
