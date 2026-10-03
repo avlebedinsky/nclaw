@@ -102,6 +102,27 @@ func BundledSkillsDir() string {
 	return "/opt/nclaw-skills"
 }
 
+// WhisperBin returns the whisper.cpp CLI used for voice transcription (env: NCLAW_WHISPER_BIN, default whisper-cli).
+func WhisperBin() string {
+	if bin := viper.GetString("whisper.bin"); bin != "" {
+		return bin
+	}
+	return "whisper-cli"
+}
+
+// WhisperModel returns the ggml Whisper model path; empty disables transcription (env: NCLAW_WHISPER_MODEL).
+func WhisperModel() string {
+	return viper.GetString("whisper.model")
+}
+
+// WhisperLanguage returns the spoken-language hint for Whisper (env: NCLAW_WHISPER_LANGUAGE, default auto).
+func WhisperLanguage() string {
+	if lang := viper.GetString("whisper.language"); lang != "" {
+		return lang
+	}
+	return "auto"
+}
+
 // DataDir returns the configured data directory path.
 func DataDir() string {
 	return viper.GetString("data_dir")

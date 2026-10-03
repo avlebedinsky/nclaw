@@ -366,7 +366,7 @@ func TestMessageContent_CaptionWithoutAttachment(t *testing.T) {
 }
 
 func TestBuildPrompt_NoAttachment(t *testing.T) {
-	result := buildPrompt(context.TODO(), nil, "just text", nil, "/tmp")
+	result := (&Handler{}).buildPrompt(context.TODO(), "just text", nil, "/tmp")
 	assert.Equal(t, "just text", result)
 }
 
@@ -506,7 +506,7 @@ func TestEnsureDir_AlreadyExists(t *testing.T) {
 
 func TestBuildPrompt_WithAttachment(t *testing.T) {
 	// When attachment is nil, buildPrompt should return plain text unchanged.
-	result := buildPrompt(context.TODO(), nil, "some text", nil, t.TempDir())
+	result := (&Handler{}).buildPrompt(context.TODO(), "some text", nil, t.TempDir())
 	assert.Equal(t, "some text", result)
 }
 
@@ -701,7 +701,7 @@ func TestBuildPrompt_WithDownloadError(t *testing.T) {
 	require.NoError(t, err)
 
 	att := &attachment{fileID: "f1", filename: "test.pdf"}
-	result := buildPrompt(context.Background(), b, "analyze this", att, t.TempDir())
+	result := (&Handler{Bot: b}).buildPrompt(context.Background(), "analyze this", att, t.TempDir())
 	// Should contain original text plus error message.
 	assert.Contains(t, result, "analyze this")
 	assert.Contains(t, result, "file attachment failed to download")
@@ -729,7 +729,7 @@ func TestBuildPrompt_WithSuccessfulDownload(t *testing.T) {
 
 	dir := t.TempDir()
 	att := &attachment{fileID: "f1", filename: "test.pdf"}
-	result := buildPrompt(context.Background(), b, "analyze this", att, dir)
+	result := (&Handler{Bot: b}).buildPrompt(context.Background(), "analyze this", att, dir)
 	assert.Contains(t, result, "I'm sending you a file: test.pdf")
 	assert.Contains(t, result, "analyze this")
 
@@ -758,7 +758,7 @@ func TestBuildPrompt_WithAttachmentNoText(t *testing.T) {
 	require.NoError(t, err)
 
 	att := &attachment{fileID: "f1", filename: "photo.jpg"}
-	result := buildPrompt(context.Background(), b, "", att, t.TempDir())
+	result := (&Handler{Bot: b}).buildPrompt(context.Background(), "", att, t.TempDir())
 	assert.Contains(t, result, "I'm sending you a file: photo.jpg")
 	// No trailing user text appended.
 	assert.NotContains(t, result, "\n\n\n")
@@ -832,7 +832,7 @@ func TestSettleFor(t *testing.T) {
 }
 
 func TestComposePrompt_SingleMessageUnchanged(t *testing.T) {
-	assert.Equal(t, "hello", composePrompt(context.Background(), nil, t.TempDir(), []Inbound{{text: "hello"}}))
+	assert.Equal(t, "hello", (&Handler{}).composePrompt(context.Background(), t.TempDir(), []Inbound{{text: "hello"}}))
 }
 
 func TestComposePrompt_AlbumWithCaptionAndFollowUp(t *testing.T) {
@@ -841,7 +841,7 @@ func TestComposePrompt_AlbumWithCaptionAndFollowUp(t *testing.T) {
 	require.NoError(t, err)
 	dir := t.TempDir()
 
-	prompt := composePrompt(context.Background(), b, dir, []Inbound{
+	prompt := (&Handler{Bot: b}).composePrompt(context.Background(), dir, []Inbound{
 		{text: "what is on these?", att: &attachment{fileID: "f1", fileUniqueID: "u1", filename: "photo.jpg"}, mediaGroup: "g1"},
 		{att: &attachment{fileID: "f2", fileUniqueID: "u2", filename: "photo.jpg"}, mediaGroup: "g1"},
 		{text: "and compare them"},
@@ -858,7 +858,7 @@ func TestComposePrompt_AlbumDownloadFailure(t *testing.T) {
 	b, err := bot.New("123:SECRET", bot.WithServerURL(srv.URL), bot.WithSkipGetMe())
 	require.NoError(t, err)
 
-	prompt := composePrompt(context.Background(), b, t.TempDir(), []Inbound{
+	prompt := (&Handler{Bot: b}).composePrompt(context.Background(), t.TempDir(), []Inbound{
 		{att: &attachment{fileID: "f1", fileUniqueID: "u1", filename: "a.jpg"}, mediaGroup: "g"},
 		{att: &attachment{fileID: "missing", fileUniqueID: "u2", filename: "b.jpg"}, mediaGroup: "g"},
 	})
@@ -1071,4 +1071,75 @@ func TestRunBatch_ShowsAndRemovesProgress(t *testing.T) {
 
 	assert.Equal(t, []string{"send:🔧 Bash: make test", "delete:9"}, api.ops)
 	assert.Equal(t, []string{"tests pass"}, sent.all())
+}
+
+// --- transcription tests ---
+
+type fakeTranscriber struct {
+	text  string
+	err   error
+	calls []string
+}
+
+func (f *fakeTranscriber) Transcribe(_ context.Context, path string) (string, error) {
+	f.calls = append(f.calls, path)
+	return f.text, f.err
+}
+
+func voiceHandler(t *testing.T, tr Transcriber) *Handler {
+	t.Helper()
+	srv := newFileServer(t, map[string]string{"v1": "opus"})
+	b, err := bot.New("123:SECRET", bot.WithServerURL(srv.URL), bot.WithSkipGetMe())
+	require.NoError(t, err)
+	return &Handler{Bot: b, Transcriber: tr}
+}
+
+func TestBuildPrompt_VoiceIsTranscribed(t *testing.T) {
+	tr := &fakeTranscriber{text: "напомни выпить воды"}
+	h := voiceHandler(t, tr)
+	dir := t.TempDir()
+
+	prompt := h.buildPrompt(context.Background(), "", &attachment{fileID: "v1", fileUniqueID: "u1", filename: "voice.ogg", speech: true, duration: 4}, dir)
+
+	path := filepath.Join(dir, "voice_u1.ogg")
+	assert.Equal(t, []string{path}, tr.calls)
+	assert.Equal(t, "[Voice message, transcribed]: напомни выпить воды\n\n(Transcribed locally from "+path+
+		". Treat the text above as my message; the audio does not need to be transcribed again.)", prompt)
+}
+
+func TestBuildPrompt_TranscriptionFallbacks(t *testing.T) {
+	cases := map[string]struct {
+		tr  Transcriber
+		att attachment
+	}{
+		"error":      {&fakeTranscriber{err: errors.New("whisper failed")}, attachment{speech: true, duration: 4}},
+		"too long":   {&fakeTranscriber{text: "x"}, attachment{speech: true, duration: maxSpeechSeconds + 1}},
+		"not speech": {&fakeTranscriber{text: "x"}, attachment{}},
+		"disabled":   {nil, attachment{speech: true, duration: 4}},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			h := voiceHandler(t, tc.tr)
+			att := tc.att
+			att.fileID, att.fileUniqueID, att.filename = "v1", "u1", "voice.ogg"
+
+			prompt := h.buildPrompt(context.Background(), "caption", &att, t.TempDir())
+
+			assert.True(t, strings.HasPrefix(prompt, "I'm sending you a file: voice.ogg"), prompt)
+			assert.True(t, strings.HasSuffix(prompt, "caption"))
+		})
+	}
+}
+
+func TestExtractAttachment_SpeechFlags(t *testing.T) {
+	voice := extractAttachment(&models.Message{Voice: &models.Voice{FileID: "v", Duration: 7}})
+	assert.True(t, voice.speech)
+	assert.Equal(t, 7, voice.duration)
+
+	note := extractAttachment(&models.Message{VideoNote: &models.VideoNote{FileID: "n", Duration: 9}})
+	assert.True(t, note.speech)
+	assert.Equal(t, 9, note.duration)
+
+	assert.False(t, extractAttachment(&models.Message{Audio: &models.Audio{FileID: "a"}}).speech)
+	assert.False(t, extractAttachment(&models.Message{Document: &models.Document{FileID: "d"}}).speech)
 }

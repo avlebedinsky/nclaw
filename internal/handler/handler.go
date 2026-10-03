@@ -21,6 +21,8 @@ import (
 	"github.com/nickalie/nclaw/internal/progress"
 )
 
+const maxSpeechSeconds = 600
+
 // Handler processes incoming Telegram messages.
 type Handler struct {
 	Invoker     *invoker.Invoker
@@ -30,6 +32,12 @@ type Handler struct {
 	BotUsername string
 	Send        pipeline.SendFunc
 	Progress    progress.MessageAPI
+	Transcriber Transcriber
+}
+
+// Transcriber turns a downloaded voice message or video note into text.
+type Transcriber interface {
+	Transcribe(ctx context.Context, path string) (string, error)
 }
 
 // AllowChat is bot middleware that drops updates without a message or from chats
@@ -78,7 +86,7 @@ func (h *Handler) RunBatch(ctx context.Context, key chatqueue.Key, batch []Inbou
 	defer stopTyping()
 	go sendTyping(typingCtx, h.Bot, key.ChatID, key.ThreadID)
 
-	prompt := composePrompt(ctx, h.Bot, dir, batch)
+	prompt := h.composePrompt(ctx, dir, batch)
 	log.Printf("handler: running %d message(s) for chat=%d thread=%d prompt_len=%d", len(batch), key.ChatID, key.ThreadID, len(prompt))
 
 	var stream *pipeline.StreamState
@@ -172,16 +180,21 @@ func messageContent(msg *models.Message) (string, *attachment) {
 	return text, att
 }
 
-// buildPrompt constructs the prompt for Claude, downloading any attachment first.
-func buildPrompt(ctx context.Context, b *bot.Bot, text string, att *attachment, dir string) string {
+func (h *Handler) buildPrompt(ctx context.Context, text string, att *attachment, dir string) string {
 	if att == nil {
 		return text
 	}
 
-	localPath, err := downloadAttachment(ctx, b, att, dir)
+	localPath, err := downloadAttachment(ctx, h.Bot, att, dir)
 	if err != nil {
 		log.Printf("handler: download error: %v", err)
 		return text + "\n\n(file attachment failed to download: " + err.Error() + ")"
+	}
+
+	if transcript := h.transcribe(ctx, att, localPath); transcript != "" {
+		return joinNonEmpty("[Voice message, transcribed]: "+transcript,
+			"(Transcribed locally from "+localPath+". Treat the text above as my message; the audio does not need to be transcribed again.)",
+			text)
 	}
 
 	prompt := fmt.Sprintf("I'm sending you a file: %s (saved at %s). Please read it.\n\n", att.filename, localPath)
@@ -190,6 +203,21 @@ func buildPrompt(ctx context.Context, b *bot.Bot, text string, att *attachment, 
 	}
 
 	return prompt
+}
+
+func (h *Handler) transcribe(ctx context.Context, att *attachment, path string) string {
+	if h.Transcriber == nil || !att.speech || att.duration > maxSpeechSeconds {
+		return ""
+	}
+
+	start := time.Now()
+	text, err := h.Transcriber.Transcribe(ctx, path)
+	if err != nil {
+		log.Printf("handler: transcribe %s: %v", path, err)
+		return ""
+	}
+	log.Printf("handler: transcribed %ds of audio in %s (%d chars)", att.duration, time.Since(start).Round(time.Millisecond), len(text))
+	return text
 }
 
 func sendTyping(ctx context.Context, b *bot.Bot, chatID int64, threadID int) {

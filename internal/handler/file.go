@@ -22,6 +22,8 @@ type attachment struct {
 	fileUniqueID string
 	fileSize     int64
 	filename     string
+	speech       bool
+	duration     int
 }
 
 // extractAttachment returns file info if the message contains a file, or nil otherwise.
@@ -46,7 +48,8 @@ func extractMedia(msg *models.Message) *attachment {
 		return &attachment{fileID: a.FileID, fileUniqueID: a.FileUniqueID, fileSize: a.FileSize, filename: nameOr(a.FileName, "audio.ogg")}
 	case msg.Voice != nil:
 		v := msg.Voice
-		return &attachment{fileID: v.FileID, fileUniqueID: v.FileUniqueID, fileSize: v.FileSize, filename: "voice.ogg"}
+		return &attachment{fileID: v.FileID, fileUniqueID: v.FileUniqueID, fileSize: v.FileSize, filename: "voice.ogg",
+			speech: true, duration: v.Duration}
 	default:
 		return nil
 	}
@@ -61,7 +64,7 @@ func extractExtra(msg *models.Message) *attachment {
 	case msg.VideoNote != nil:
 		v := msg.VideoNote
 		return &attachment{fileID: v.FileID, fileUniqueID: v.FileUniqueID, fileSize: int64(v.FileSize),
-			filename: "video_note.mp4"}
+			filename: "video_note.mp4", speech: true, duration: v.Duration}
 	case msg.Animation != nil:
 		a := msg.Animation
 		return &attachment{fileID: a.FileID, fileUniqueID: a.FileUniqueID, fileSize: a.FileSize,

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -331,4 +332,22 @@ func TestBundledSkillsDir(t *testing.T) {
 	viper.Set("bundled_skills_dir", "/srv/skills")
 	defer viper.Reset()
 	assert.Equal(t, "/srv/skills", BundledSkillsDir())
+}
+
+func TestWhisperSettings(t *testing.T) {
+	viper.Reset()
+	assert.Equal(t, "whisper-cli", WhisperBin())
+	assert.Empty(t, WhisperModel())
+	assert.Equal(t, "auto", WhisperLanguage())
+
+	t.Setenv("NCLAW_WHISPER_MODEL", "/opt/whisper/m.bin")
+	t.Setenv("NCLAW_WHISPER_LANGUAGE", "ru")
+	t.Setenv("NCLAW_WHISPER_BIN", "/usr/bin/whisper")
+	viper.AutomaticEnv()
+	viper.SetEnvPrefix("NCLAW")
+	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+	defer viper.Reset()
+	assert.Equal(t, "/opt/whisper/m.bin", WhisperModel())
+	assert.Equal(t, "ru", WhisperLanguage())
+	assert.Equal(t, "/usr/bin/whisper", WhisperBin())
 }

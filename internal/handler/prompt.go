@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
 )
 
@@ -38,16 +37,16 @@ func settleFor(msg *models.Message) time.Duration {
 	return messageSettle
 }
 
-func composePrompt(ctx context.Context, b *bot.Bot, dir string, batch []Inbound) string {
+func (h *Handler) composePrompt(ctx context.Context, dir string, batch []Inbound) string {
 	parts := groupAlbums(batch)
 	if len(parts) == 1 {
-		return partPrompt(ctx, b, dir, parts[0])
+		return h.partPrompt(ctx, dir, parts[0])
 	}
 
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "The user sent %d messages in a row. Treat them as one request and answer them together.\n", len(parts))
 	for i, part := range parts {
-		fmt.Fprintf(&sb, "\n--- Message %d ---\n%s\n", i+1, partPrompt(ctx, b, dir, part))
+		fmt.Fprintf(&sb, "\n--- Message %d ---\n%s\n", i+1, h.partPrompt(ctx, dir, part))
 	}
 	return strings.TrimRight(sb.String(), "\n")
 }
@@ -65,14 +64,14 @@ func groupAlbums(batch []Inbound) [][]Inbound {
 	return parts
 }
 
-func partPrompt(ctx context.Context, b *bot.Bot, dir string, part []Inbound) string {
+func (h *Handler) partPrompt(ctx context.Context, dir string, part []Inbound) string {
 	if len(part) == 1 {
-		return buildPrompt(ctx, b, part[0].text, part[0].att, dir)
+		return h.buildPrompt(ctx, part[0].text, part[0].att, dir)
 	}
-	return albumPrompt(ctx, b, dir, part)
+	return h.albumPrompt(ctx, dir, part)
 }
 
-func albumPrompt(ctx context.Context, b *bot.Bot, dir string, part []Inbound) string {
+func (h *Handler) albumPrompt(ctx context.Context, dir string, part []Inbound) string {
 	var files, failed, texts []string
 	for _, in := range part {
 		if in.text != "" {
@@ -81,7 +80,7 @@ func albumPrompt(ctx context.Context, b *bot.Bot, dir string, part []Inbound) st
 		if in.att == nil {
 			continue
 		}
-		path, err := downloadAttachment(ctx, b, in.att, dir)
+		path, err := downloadAttachment(ctx, h.Bot, in.att, dir)
 		if err != nil {
 			log.Printf("handler: download error: %v", err)
 			failed = append(failed, fmt.Sprintf("%s (%v)", in.att.filename, err))

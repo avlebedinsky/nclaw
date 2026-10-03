@@ -32,6 +32,7 @@ import (
 	"github.com/nickalie/nclaw/internal/scheduler"
 	"github.com/nickalie/nclaw/internal/sendfile"
 	"github.com/nickalie/nclaw/internal/skills"
+	"github.com/nickalie/nclaw/internal/transcribe"
 	"github.com/nickalie/nclaw/internal/version"
 	"github.com/nickalie/nclaw/internal/webhook"
 )
@@ -141,6 +142,7 @@ func setupBot(database *gorm.DB, provider cli.Provider) *app {
 	if config.Progress() {
 		h.Progress = progress.NewBotAPI(b)
 	}
+	h.Transcriber = newTranscriber()
 	registerCommands(b, h)
 
 	fileSenders := sendfile.Senders{
@@ -169,6 +171,21 @@ func setupBot(database *gorm.DB, provider cli.Provider) *app {
 	webhookSrv := startWebhookServer(webhookMgr)
 
 	return &app{bot: b, handler: h, queue: queue, sched: sched, webhookMgr: webhookMgr, webhookSrv: webhookSrv}
+}
+
+func newTranscriber() handler.Transcriber {
+	t, err := transcribe.New(&transcribe.Config{
+		WhisperBin: config.WhisperBin(),
+		FFmpegBin:  "ffmpeg",
+		Model:      config.WhisperModel(),
+		Language:   config.WhisperLanguage(),
+	})
+	if err != nil {
+		log.Printf("transcribe: voice transcription disabled: %v", err)
+		return nil
+	}
+	log.Printf("transcribe: enabled (model=%s, language=%s)", config.WhisperModel(), config.WhisperLanguage())
+	return t
 }
 
 func installBundledSkills() {
