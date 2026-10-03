@@ -673,14 +673,15 @@ func TestDefault_BurstIsAnsweredOnce(t *testing.T) {
 func TestDefault_EmptyMessage(t *testing.T) {
 	viper.Reset()
 
-	h := &Handler{}
+	h := newTestHandler(t, &mockProvider{client: &mockClient{}}, nil)
 	update := &models.Update{
 		Message: &models.Message{
 			Chat: models.Chat{ID: 100},
 		},
 	}
-	// Empty message (no text, no attachment) should return early.
 	h.Default(context.Background(), newTestBot(t), update)
+
+	assert.Equal(t, 0, h.Queue.Snapshot(chatKey(100)).PendingUser)
 }
 
 // --- buildPrompt tests ---
@@ -847,7 +848,7 @@ func TestComposePrompt_AlbumWithCaptionAndFollowUp(t *testing.T) {
 		{text: "and compare them"},
 	})
 
-	assert.Contains(t, prompt, "The user sent 2 messages in a row")
+	assert.Contains(t, prompt, "2 messages arrived in a row")
 	assert.Contains(t, prompt, "--- Message 1 ---\nI'm sending you 2 files: photo.jpg (saved at "+filepath.Join(dir, "photo_u1.jpg")+
 		"), photo.jpg (saved at "+filepath.Join(dir, "photo_u2.jpg")+"). Please read them.\n\nwhat is on these?")
 	assert.Contains(t, prompt, "--- Message 2 ---\nand compare them")

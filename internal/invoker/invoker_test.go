@@ -355,3 +355,57 @@ func TestSessionSize(t *testing.T) {
 	_, ok = newTestInvoker(t, &fakeProvider{}, Options{}).SessionSize(1, 0)
 	assert.False(t, ok)
 }
+
+type memoryProvider struct {
+	fakeProvider
+}
+
+func (p *memoryProvider) MemoryFile() string { return "CLAUDE.md" }
+
+func TestRun_NamesPrivateChatPerson(t *testing.T) {
+	client := &fakeClient{result: &cli.Result{}}
+	inv := newTestInvoker(t, &memoryProvider{fakeProvider{client: client}}, Options{})
+	_, err := telegram.SaveChatName(inv.ChatDir(396429376, 0), "Анна")
+	require.NoError(t, err)
+
+	inv.Run(context.Background(), Request{ChatID: 396429376, Prompt: "x"})
+
+	assert.Contains(t, client.systemPrompt, "This is a private Telegram chat with Анна.")
+	assert.NotContains(t, client.systemPrompt, "auto memory")
+}
+
+func TestRun_NamesGroupTopicAndSharedMemory(t *testing.T) {
+	client := &fakeClient{result: &cli.Result{}}
+	inv := newTestInvoker(t, &memoryProvider{fakeProvider{client: client}}, Options{})
+	_, err := telegram.SaveChatName(inv.ChatDir(-100123, 0), "Семья")
+	require.NoError(t, err)
+	_, err = telegram.SaveTopicName(inv.ChatDir(-100123, 1224), "Финансы")
+	require.NoError(t, err)
+
+	inv.Run(context.Background(), Request{ChatID: -100123, ThreadID: 1224, Prompt: "x"})
+
+	assert.Contains(t, client.systemPrompt, "This is the Telegram group «Семья». Messages from people start with [From: name].")
+	assert.Contains(t, client.systemPrompt, "This conversation is the topic «Финансы» of that chat")
+	assert.Contains(t, client.systemPrompt, "go into "+filepath.Join(inv.ChatDir(-100123, 0), "CLAUDE.md"))
+}
+
+func TestRun_SharedMemoryOnlyForProvidersThatLoadIt(t *testing.T) {
+	client := &fakeClient{result: &cli.Result{}}
+	inv := newTestInvoker(t, &fakeProvider{client: client}, Options{})
+
+	inv.Run(context.Background(), Request{ChatID: -100123, ThreadID: 5, Prompt: "x"})
+
+	assert.Contains(t, client.systemPrompt, "This is a Telegram group chat.")
+	assert.NotContains(t, client.systemPrompt, "CLAUDE.md")
+	assert.NotContains(t, client.systemPrompt, "This conversation is the topic")
+}
+
+func TestRun_PrivateChatTopicGetsSharedMemory(t *testing.T) {
+	client := &fakeClient{result: &cli.Result{}}
+	inv := newTestInvoker(t, &memoryProvider{fakeProvider{client: client}}, Options{})
+
+	inv.Run(context.Background(), Request{ChatID: 375321681, ThreadID: 9, Prompt: "x"})
+
+	assert.Contains(t, client.systemPrompt, "This is a private Telegram chat.")
+	assert.Contains(t, client.systemPrompt, filepath.Join(inv.ChatDir(375321681, 0), "CLAUDE.md"))
+}

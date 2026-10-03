@@ -11,7 +11,10 @@ import (
 	"time"
 )
 
-const keepArchives = 3
+const (
+	keepArchives = 3
+	memoryDir    = "memory"
+)
 
 // ConfigDir returns Claude Code's configuration directory: $CLAUDE_CONFIG_DIR, or ~/.claude when unset.
 func ConfigDir() (string, error) {
@@ -35,22 +38,42 @@ func SessionSize(dir string) (int64, bool) {
 	return latestTranscriptSize(projectDir)
 }
 
-// ArchiveSession moves the session history of the working directory dir aside so the
-// next run starts a fresh conversation, keeping only the newest few archives.
+// ArchiveSession moves the conversation history of the working directory dir aside so
+// the next run starts a fresh conversation, keeping only the newest few archives. Claude's
+// auto memory for dir stays in place.
 func ArchiveSession(dir string) error {
 	projectDir, err := sessionDir(dir)
 	if err != nil {
 		return err
 	}
-	if _, err := os.Stat(projectDir); os.IsNotExist(err) {
+	entries, err := os.ReadDir(projectDir)
+	if os.IsNotExist(err) {
 		return nil
 	}
+	if err != nil {
+		return err
+	}
 
-	archived := fmt.Sprintf("%s.archived-%d", projectDir, time.Now().UnixNano())
-	if err := os.Rename(projectDir, archived); err != nil {
+	if err := moveHistory(projectDir, entries); err != nil {
 		return err
 	}
 	pruneArchives(projectDir)
+	return nil
+}
+
+func moveHistory(projectDir string, entries []os.DirEntry) error {
+	archived := fmt.Sprintf("%s.archived-%d", projectDir, time.Now().UnixNano())
+	for _, e := range entries {
+		if e.Name() == memoryDir {
+			continue
+		}
+		if err := os.MkdirAll(archived, 0o755); err != nil {
+			return err
+		}
+		if err := os.Rename(filepath.Join(projectDir, e.Name()), filepath.Join(archived, e.Name())); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

@@ -111,6 +111,7 @@ func (h *Handler) Default(_ context.Context, _ *bot.Bot, update *models.Update) 
 	if msg == nil {
 		return
 	}
+	h.rememberChat(msg)
 	if _, forMe, isCmd := parseCommand(msg.Text, h.BotUsername); isCmd && !forMe {
 		return
 	}

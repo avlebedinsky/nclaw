@@ -19,6 +19,7 @@ var (
 	_ cli.Provider             = (*Provider)(nil)
 	_ cli.NativeSkillsProvider = (*Provider)(nil)
 	_ cli.SessionStore         = (*Provider)(nil)
+	_ cli.MemoryFileProvider   = (*Provider)(nil)
 )
 
 // NewProvider creates a new claudish CLI provider with model configuration.
@@ -56,6 +57,11 @@ func (p *Provider) Version() (string, error) {
 // Name returns the backend name.
 func (p *Provider) Name() string {
 	return "claudish"
+}
+
+// MemoryFile names the instructions file Claude Code loads from the working directory and its parents.
+func (p *Provider) MemoryFile() string {
+	return "CLAUDE.md"
 }
 
 // NativeSkills reports that the CLI loads skills from its own skills directory.
