@@ -9,6 +9,8 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -16,6 +18,7 @@ import (
 	"github.com/go-telegram/bot/models"
 	"gorm.io/gorm"
 
+	"github.com/nickalie/nclaw/internal/authwatch"
 	"github.com/nickalie/nclaw/internal/chatqueue"
 	"github.com/nickalie/nclaw/internal/cli"
 	"github.com/nickalie/nclaw/internal/cli/claude"
@@ -77,6 +80,7 @@ func main() {
 
 	log.Printf("nclaw bot started (%s, %s: %s)", version.String(), provider.Name(), cliVer)
 	sendStartupNotifications(a.bot)
+	a.startWatchers(ctx)
 	a.bot.Start(ctx)
 	stop()
 
@@ -94,6 +98,13 @@ type app struct {
 	sched      *scheduler.Scheduler
 	webhookMgr *webhook.Manager
 	webhookSrv *webhook.Server
+	authWatch  *authwatch.Watcher
+}
+
+func (a *app) startWatchers(ctx context.Context) {
+	if a.authWatch != nil {
+		go a.authWatch.Run(ctx)
+	}
 }
 
 func (a *app) shutdown(timeout time.Duration) {
@@ -143,6 +154,12 @@ func setupBot(database *gorm.DB, provider cli.Provider) *app {
 		h.Progress = progress.NewBotAPI(b)
 	}
 	h.Transcriber = newTranscriber()
+	if config.Reactions() {
+		h.React = newReactFunc(b)
+	}
+	if config.LiveDrafts() {
+		h.Drafts = draftAPI{b: b}
+	}
 	registerCommands(b, h)
 
 	fileSenders := sendfile.Senders{
@@ -161,6 +178,7 @@ func setupBot(database *gorm.DB, provider cli.Provider) *app {
 	if webhookMgr != nil {
 		webhookMgr.SetPipeline(p)
 	}
+	authWatch := wireAuth(provider, h, p, loc)
 
 	// Load tasks and start scheduler before webhook server to avoid a race where
 	// an incoming webhook creates a task that LoadTasks then re-registers as a duplicate job.
@@ -170,7 +188,57 @@ func setupBot(database *gorm.DB, provider cli.Provider) *app {
 	// Start webhook HTTP server after pipeline is wired and scheduler is loaded.
 	webhookSrv := startWebhookServer(webhookMgr)
 
-	return &app{bot: b, handler: h, queue: queue, sched: sched, webhookMgr: webhookMgr, webhookSrv: webhookSrv}
+	return &app{bot: b, handler: h, queue: queue, sched: sched, webhookMgr: webhookMgr, webhookSrv: webhookSrv, authWatch: authWatch}
+}
+
+func wireAuth(provider cli.Provider, h *handler.Handler, p *pipeline.Pipeline, loc *time.Location) *authwatch.Watcher {
+	auth, ok := provider.(cli.AuthProvider)
+	if !ok {
+		return nil
+	}
+	admin := config.AdminChatID()
+	h.Logins = newLogins(provider, admin)
+	renewHint, failureHint := signInHints(h.Logins != nil)
+	p.SetFailureHint(func(output string) string {
+		if auth.IsAuthFailure(output) {
+			return failureHint
+		}
+		return ""
+	})
+
+	w := authwatch.New(authwatch.Options{
+		Name:      "Claude",
+		Expiry:    auth.AuthExpiry,
+		RenewHint: renewHint,
+		Location:  loc,
+		Notify: func(ctx context.Context, text string) error {
+			return h.Send(ctx, pipeline.Dest{ChatID: admin}, text, "")
+		},
+	})
+	h.AuthStatus = w.Status
+	if admin == 0 {
+		log.Println("authwatch: no admin chat, sign-in expiry warnings are off (set NCLAW_ADMIN_CHAT_ID)")
+		return nil
+	}
+	log.Printf("authwatch: sign-in expiry warnings go to chat %d", admin)
+	return w
+}
+
+func newLogins(provider cli.Provider, admin int64) *handler.Logins {
+	lp, ok := provider.(cli.LoginProvider)
+	if !ok || admin <= 0 {
+		return nil
+	}
+	return &handler.Logins{Provider: lp, AdminChatID: admin}
+}
+
+func signInHints(loginEnabled bool) (renew, failure string) {
+	const expired = "🔑 The bot's Claude sign-in has expired or was revoked. "
+	if loginEnabled {
+		return "Send /login here to sign in again.", expired + "Send /login in the admin's private chat with the bot to sign in again."
+	}
+	const manual = "To sign in again, run claude auth login inside the bot's container."
+	return manual, expired + manual
 }
 
 func newTranscriber() handler.Transcriber {
@@ -221,8 +289,16 @@ func registerCommands(b *bot.Bot, h *handler.Handler) {
 		h.BotUsername = me.Username
 	}
 	b.RegisterHandlerMatchFunc(h.MatchCommand, h.Command)
+	b.RegisterHandlerMatchFunc(h.MatchStopGeneration, h.StopGeneration)
 	if _, err := b.SetMyCommands(ctx, &bot.SetMyCommandsParams{Commands: handler.Commands}); err != nil {
 		log.Printf("telegram: setMyCommands: %v", err)
+	}
+	if h.Logins != nil {
+		adminCommands := append(slices.Clone(handler.Commands), handler.LoginCommand)
+		scope := &models.BotCommandScopeChat{ChatID: h.Logins.AdminChatID}
+		if _, err := b.SetMyCommands(ctx, &bot.SetMyCommandsParams{Commands: adminCommands, Scope: scope}); err != nil {
+			log.Printf("telegram: setMyCommands for the admin chat: %v", err)
+		}
 	}
 }
 
@@ -286,7 +362,9 @@ func printVersion() error {
 func newProvider(backend string) (cli.Provider, error) {
 	switch backend {
 	case "claude":
-		return claude.NewProvider(config.ClaudeExecPath()), nil
+		p := claude.NewProvider(config.ClaudeExecPath())
+		p.SetLoginEmail(config.LoginEmail())
+		return p, nil
 	case "claudish":
 		return claudish.NewProvider(
 			config.Model(), config.ModelOpus(), config.ModelSonnet(), config.ModelHaiku(), config.ModelSubagent(),
@@ -389,12 +467,44 @@ func buildInputMedia(f sendfile.File) models.InputMedia {
 	}
 }
 
+type draftAPI struct {
+	b *bot.Bot
+}
+
+func (a draftAPI) SendDraft(ctx context.Context, chatID int64, threadID int, draftID int64, text string) error {
+	_, err := a.b.SendMessageDraft(ctx, &bot.SendMessageDraftParams{
+		ChatID:          chatID,
+		MessageThreadID: threadID,
+		DraftID:         strconv.FormatInt(draftID, 10),
+		Text:            text,
+		CanStop:         true,
+	})
+	return err
+}
+
+func newReactFunc(b *bot.Bot) handler.MessageReactor {
+	return func(ctx context.Context, chatID int64, msgID int, emoji string) error {
+		params := &bot.SetMessageReactionParams{ChatID: chatID, MessageID: msgID, Reaction: []models.ReactionType{}}
+		if emoji != "" {
+			params.Reaction = []models.ReactionType{{
+				Type:              models.ReactionTypeTypeEmoji,
+				ReactionTypeEmoji: &models.ReactionTypeEmoji{Emoji: emoji},
+			}}
+		}
+		_, err := b.SetMessageReaction(ctx, params)
+		return err
+	}
+}
+
 func newPipelineSendFunc(b *bot.Bot) pipeline.SendFunc {
-	return func(ctx context.Context, chatID int64, threadID int, text, parseMode string) error {
+	return func(ctx context.Context, dest pipeline.Dest, text, parseMode string) error {
 		params := &bot.SendMessageParams{
-			ChatID:          chatID,
-			MessageThreadID: threadID,
+			ChatID:          dest.ChatID,
+			MessageThreadID: dest.ThreadID,
 			Text:            text,
+		}
+		if dest.ReplyTo != 0 {
+			params.ReplyParameters = &models.ReplyParameters{MessageID: dest.ReplyTo, AllowSendingWithoutReply: true}
 		}
 		if parseMode != "" {
 			params.ParseMode = models.ParseMode(parseMode)

@@ -128,6 +128,38 @@ func TestExecuteBlocks_DefaultContextMode(t *testing.T) {
 	assert.Equal(t, model.ContextGroup, tasks[0].ContextMode)
 }
 
+func TestExecuteBlocks_CreateNotifyTask(t *testing.T) {
+	s := setupTestScheduler(t)
+	s.Start()
+	defer s.Shutdown()
+
+	text := "```nclaw:schedule\n" +
+		`{"action":"create","prompt":"⏰ Call the dentist","type":"interval","value":"1h","context":"notify"}` +
+		"\n```"
+	assert.Empty(t, s.ExecuteBlocks(text, 200, 0))
+
+	var tasks []model.ScheduledTask
+	require.NoError(t, s.db.Find(&tasks).Error)
+	require.Len(t, tasks, 1)
+	assert.Equal(t, model.ContextNotify, tasks[0].ContextMode)
+	assert.Contains(t, FormatTaskList(s.db, time.UTC, 200, 0), "context=notify")
+}
+
+func TestExecuteBlocks_RejectsUnknownContext(t *testing.T) {
+	s := setupTestScheduler(t)
+	s.Start()
+	defer s.Shutdown()
+
+	text := "```nclaw:schedule\n" +
+		`{"action":"create","prompt":"check","type":"interval","value":"1h","context":"silent"}` +
+		"\n```"
+	assert.Contains(t, s.ExecuteBlocks(text, 200, 0), `invalid context "silent"`)
+
+	var count int64
+	require.NoError(t, s.db.Model(&model.ScheduledTask{}).Count(&count).Error)
+	assert.Zero(t, count)
+}
+
 func TestExecuteBlocks_NoBlocks(t *testing.T) {
 	s := setupTestScheduler(t)
 	result := s.ExecuteBlocks("plain text", 100, 0)

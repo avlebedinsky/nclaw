@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -37,11 +38,12 @@ type sendCall struct {
 	threadID  int
 	text      string
 	parseMode string
+	replyTo   int
 }
 
 func (m *mockSend) fn() SendFunc {
-	return func(_ context.Context, chatID int64, threadID int, text, parseMode string) error {
-		m.calls = append(m.calls, sendCall{chatID, threadID, text, parseMode})
+	return func(_ context.Context, dest Dest, text, parseMode string) error {
+		m.calls = append(m.calls, sendCall{dest.ChatID, dest.ThreadID, text, parseMode, dest.ReplyTo})
 		return m.err
 	}
 }
@@ -55,7 +57,7 @@ func TestProcess_SuccessPath(t *testing.T) {
 		Text:     "Hello world",
 		FullText: "Hello world",
 	}
-	p.Process(context.Background(), result, nil, 100, 0, "/tmp", false)
+	p.Process(context.Background(), result, nil, Dest{ChatID: 100, ThreadID: 0}, "/tmp", false)
 
 	assert.True(t, exec.called)
 	assert.Equal(t, "Hello world", exec.lastText)
@@ -74,7 +76,7 @@ func TestProcess_ErrorPath_SkipsExecution(t *testing.T) {
 		Text:     "error: something went wrong",
 		FullText: "error: something went wrong",
 	}
-	p.Process(context.Background(), result, errors.New("claude failed"), 100, 0, "/tmp", false)
+	p.Process(context.Background(), result, errors.New("claude failed"), Dest{ChatID: 100, ThreadID: 0}, "/tmp", false)
 
 	assert.False(t, exec.called, "executors should not run on error")
 	require.Len(t, ms.calls, 1)
@@ -88,7 +90,7 @@ func TestProcess_NilWebhookExecutor_Filtered(t *testing.T) {
 	p := New(ms.fn(), sendfile.Senders{}, true, exec, nil)
 
 	result := &cli.Result{Text: "reply", FullText: "reply"}
-	p.Process(context.Background(), result, nil, 100, 0, "/tmp", false)
+	p.Process(context.Background(), result, nil, Dest{ChatID: 100, ThreadID: 0}, "/tmp", false)
 
 	assert.True(t, exec.called)
 	assert.Len(t, p.executors, 1, "nil executors should be filtered out")
@@ -101,7 +103,7 @@ func TestProcess_StatusAppending(t *testing.T) {
 	p := New(ms.fn(), sendfile.Senders{}, true, exec1, exec2)
 
 	result := &cli.Result{Text: "Done", FullText: "Done"}
-	p.Process(context.Background(), result, nil, 100, 0, "/tmp", false)
+	p.Process(context.Background(), result, nil, Dest{ChatID: 100, ThreadID: 0}, "/tmp", false)
 
 	require.Len(t, ms.calls, 1)
 	assert.Contains(t, ms.calls[0].text, "Done")
@@ -119,7 +121,7 @@ func TestProcess_StreamMessages_SendsEachMessage(t *testing.T) {
 		FullText: "first\nsecond\nfinal",
 		Messages: []string{"first", "second", "final"},
 	}
-	p.Process(context.Background(), result, nil, 100, 0, "/tmp", false)
+	p.Process(context.Background(), result, nil, Dest{ChatID: 100, ThreadID: 0}, "/tmp", false)
 
 	require.Len(t, ms.calls, 3)
 	assert.Equal(t, "first", ms.calls[0].text)
@@ -136,7 +138,7 @@ func TestProcess_StreamMessages_Disabled_SendsOnlyFinal(t *testing.T) {
 		FullText: "first\nsecond\nfinal",
 		Messages: []string{"first", "second", "final"},
 	}
-	p.Process(context.Background(), result, nil, 100, 0, "/tmp", false)
+	p.Process(context.Background(), result, nil, Dest{ChatID: 100, ThreadID: 0}, "/tmp", false)
 
 	require.Len(t, ms.calls, 1)
 	assert.Equal(t, "final", ms.calls[0].text)
@@ -153,7 +155,7 @@ func TestProcess_StreamMessages_StatusOnLastMessage(t *testing.T) {
 		FullText: "first\nfinal",
 		Messages: []string{"first", "final"},
 	}
-	p.Process(context.Background(), result, nil, 100, 0, "/tmp", false)
+	p.Process(context.Background(), result, nil, Dest{ChatID: 100, ThreadID: 0}, "/tmp", false)
 
 	require.Len(t, ms.calls, 2)
 	assert.Equal(t, "first", ms.calls[0].text)
@@ -173,7 +175,7 @@ func TestProcess_StreamMessages_StripsBlocksPerMessage(t *testing.T) {
 			"done",
 		},
 	}
-	p.Process(context.Background(), result, nil, 100, 0, "/tmp", false)
+	p.Process(context.Background(), result, nil, Dest{ChatID: 100, ThreadID: 0}, "/tmp", false)
 
 	require.Len(t, ms.calls, 2)
 	assert.Equal(t, "working", ms.calls[0].text)
@@ -186,7 +188,7 @@ func TestProcess_StreamMessages_EmptyMessages_FallsBackToText(t *testing.T) {
 	p.SetStreamMessages(true)
 
 	result := &cli.Result{Text: "only text", FullText: "only text"}
-	p.Process(context.Background(), result, nil, 100, 0, "/tmp", false)
+	p.Process(context.Background(), result, nil, Dest{ChatID: 100, ThreadID: 0}, "/tmp", false)
 
 	require.Len(t, ms.calls, 1)
 	assert.Equal(t, "only text", ms.calls[0].text)
@@ -197,7 +199,7 @@ func TestProcess_EmptyText_NoSend(t *testing.T) {
 	p := New(ms.fn(), sendfile.Senders{}, true)
 
 	result := &cli.Result{Text: "", FullText: ""}
-	p.Process(context.Background(), result, nil, 100, 0, "/tmp", false)
+	p.Process(context.Background(), result, nil, Dest{ChatID: 100, ThreadID: 0}, "/tmp", false)
 
 	assert.Empty(t, ms.calls, "should not send empty text")
 }
@@ -213,7 +215,7 @@ func TestProcess_StripsAllBlockTypes(t *testing.T) {
 		"Goodbye"
 
 	result := &cli.Result{Text: text, FullText: text}
-	p.Process(context.Background(), result, nil, 100, 0, "/tmp", false)
+	p.Process(context.Background(), result, nil, Dest{ChatID: 100, ThreadID: 0}, "/tmp", false)
 
 	require.Len(t, ms.calls, 1)
 	assert.NotContains(t, ms.calls[0].text, "nclaw:sendfile")
@@ -225,7 +227,7 @@ func TestProcess_StripsAllBlockTypes(t *testing.T) {
 
 func TestProcess_HTMLFallbackToPlainText(t *testing.T) {
 	callCount := 0
-	sendFn := func(_ context.Context, chatID int64, threadID int, text, parseMode string) error {
+	sendFn := func(_ context.Context, _ Dest, _, parseMode string) error {
 		callCount++
 		if parseMode == "HTML" {
 			return fmt.Errorf("HTML parse error")
@@ -235,14 +237,14 @@ func TestProcess_HTMLFallbackToPlainText(t *testing.T) {
 	p := New(sendFn, sendfile.Senders{}, true)
 
 	result := &cli.Result{Text: "Hello", FullText: "Hello"}
-	p.Process(context.Background(), result, nil, 100, 0, "/tmp", false)
+	p.Process(context.Background(), result, nil, Dest{ChatID: 100, ThreadID: 0}, "/tmp", false)
 
 	assert.Equal(t, 2, callCount, "should try HTML then plain text")
 }
 
 func TestProcess_PlainFallbackStripsTags(t *testing.T) {
 	var plain []string
-	sendFn := func(_ context.Context, _ int64, _ int, text, parseMode string) error {
+	sendFn := func(_ context.Context, _ Dest, text, parseMode string) error {
 		if parseMode == "HTML" {
 			return fmt.Errorf("HTML parse error")
 		}
@@ -252,7 +254,7 @@ func TestProcess_PlainFallbackStripsTags(t *testing.T) {
 	p := New(sendFn, sendfile.Senders{}, true)
 
 	result := &cli.Result{Text: "<b>Итог</b>: a &lt; b <p>", FullText: "<b>Итог</b>: a &lt; b <p>"}
-	p.Process(context.Background(), result, nil, 100, 0, "/tmp", false)
+	p.Process(context.Background(), result, nil, Dest{ChatID: 100, ThreadID: 0}, "/tmp", false)
 
 	assert.Equal(t, []string{"Итог: a < b <p>"}, plain)
 }
@@ -264,7 +266,7 @@ func TestProcess_MultipleExecutors(t *testing.T) {
 	p := New(ms.fn(), sendfile.Senders{}, true, exec1, exec2)
 
 	result := &cli.Result{Text: "reply", FullText: "full reply"}
-	p.Process(context.Background(), result, nil, 100, 5, "/tmp", false)
+	p.Process(context.Background(), result, nil, Dest{ChatID: 100, ThreadID: 5}, "/tmp", false)
 
 	assert.True(t, exec1.called)
 	assert.True(t, exec2.called)
@@ -307,7 +309,7 @@ func TestAttachStream_Disabled_ReturnsNil(t *testing.T) {
 	ms := &mockSend{}
 	p := New(ms.fn(), sendfile.Senders{}, true)
 
-	st := p.AttachStream(context.Background(), &streamClient{}, 100, 0)
+	st := p.AttachStream(context.Background(), &streamClient{}, Dest{ChatID: 100, ThreadID: 0})
 	assert.Nil(t, st)
 	assert.False(t, st.Streamed())
 }
@@ -317,13 +319,13 @@ func TestAttachStream_NonStreamingClient_ReturnsNil(t *testing.T) {
 	p := New(ms.fn(), sendfile.Senders{}, true)
 	p.SetStreamMessages(true)
 
-	st := p.AttachStream(context.Background(), &plainClient{}, 100, 0)
+	st := p.AttachStream(context.Background(), &plainClient{}, Dest{ChatID: 100, ThreadID: 0})
 	assert.Nil(t, st)
 }
 
 func TestAttachStream_NilPipeline_ReturnsNil(t *testing.T) {
 	var p *Pipeline
-	st := p.AttachStream(context.Background(), &streamClient{}, 100, 0)
+	st := p.AttachStream(context.Background(), &streamClient{}, Dest{ChatID: 100, ThreadID: 0})
 	assert.Nil(t, st)
 }
 
@@ -333,7 +335,7 @@ func TestAttachStream_SendsLiveAndStripsBlocks(t *testing.T) {
 	p.SetStreamMessages(true)
 
 	client := &streamClient{}
-	st := p.AttachStream(context.Background(), client, 100, 0)
+	st := p.AttachStream(context.Background(), client, Dest{ChatID: 100, ThreadID: 0})
 	require.NotNil(t, st)
 	require.NotNil(t, client.handler)
 
@@ -359,7 +361,7 @@ func TestProcess_Streamed_SkipsDisplayButRunsBlocks(t *testing.T) {
 		Messages: []string{"first", "final"},
 	}
 	// streamed=true: messages already delivered live, only status should be sent.
-	p.Process(context.Background(), result, nil, 100, 0, "/tmp", true)
+	p.Process(context.Background(), result, nil, Dest{ChatID: 100, ThreadID: 0}, "/tmp", true)
 
 	assert.True(t, exec.called, "block execution still runs on FullText")
 	assert.Equal(t, "first\nfinal", exec.lastText)
@@ -373,7 +375,7 @@ func TestProcess_Streamed_NoStatus_SendsNothing(t *testing.T) {
 	p.SetStreamMessages(true)
 
 	result := &cli.Result{Text: "final", FullText: "final", Messages: []string{"final"}}
-	p.Process(context.Background(), result, nil, 100, 0, "/tmp", true)
+	p.Process(context.Background(), result, nil, Dest{ChatID: 100, ThreadID: 0}, "/tmp", true)
 
 	assert.Empty(t, ms.calls, "streamed messages must not be re-sent")
 }
@@ -399,7 +401,7 @@ func TestProcess_WebhooksNotConfigured_WarningAppended(t *testing.T) {
 
 	text := "Here you go.\n```nclaw:webhook\n{\"action\":\"create\",\"description\":\"test\"}\n```\nDone!"
 	result := &cli.Result{Text: text, FullText: text}
-	p.Process(context.Background(), result, nil, 100, 0, "/tmp", false)
+	p.Process(context.Background(), result, nil, Dest{ChatID: 100, ThreadID: 0}, "/tmp", false)
 
 	require.Len(t, ms.calls, 1)
 	assert.Contains(t, ms.calls[0].text, "Here you go.")
@@ -415,8 +417,120 @@ func TestProcess_WebhooksConfigured_NoWarning(t *testing.T) {
 
 	text := "Done.\n```nclaw:webhook\n{\"action\":\"create\"}\n```"
 	result := &cli.Result{Text: text, FullText: text}
-	p.Process(context.Background(), result, nil, 100, 0, "/tmp", false)
+	p.Process(context.Background(), result, nil, Dest{ChatID: 100, ThreadID: 0}, "/tmp", false)
 
 	require.Len(t, ms.calls, 1)
 	assert.NotContains(t, ms.calls[0].text, "not configured")
+}
+
+func TestProcess_RepliesWithFirstChunkOnly(t *testing.T) {
+	ms := &mockSend{}
+	p := New(ms.fn(), sendfile.Senders{}, true)
+
+	long := strings.Repeat("line\n", 1200)
+	p.Process(context.Background(), &cli.Result{Text: long, FullText: long}, nil, Dest{ChatID: 1, ThreadID: 2, ReplyTo: 42}, "/tmp", false)
+
+	require.Greater(t, len(ms.calls), 1)
+	assert.Equal(t, 42, ms.calls[0].replyTo)
+	for _, c := range ms.calls[1:] {
+		assert.Zero(t, c.replyTo)
+		assert.Equal(t, 2, c.threadID)
+	}
+}
+
+func longHTMLAnswer() string {
+	return "<b>Report</b>\n" + strings.Repeat("row of the report\n", 1000)
+}
+
+func TestProcess_LongAnswerGoesToFile(t *testing.T) {
+	ms := &mockSend{}
+	var docName, docBody, docCaption string
+	senders := sendfile.Senders{Doc: func(_ context.Context, _ int64, _ int, filename string, data []byte, caption string) error {
+		docName, docBody, docCaption = filename, string(data), caption
+		return nil
+	}}
+	p := New(ms.fn(), senders, true)
+
+	text := longHTMLAnswer()
+	p.Process(context.Background(), &cli.Result{Text: text, FullText: text}, nil, Dest{ChatID: 1, ReplyTo: 9}, "/tmp", false)
+
+	require.Len(t, ms.calls, 1)
+	assert.Equal(t, 9, ms.calls[0].replyTo)
+	assert.True(t, strings.HasPrefix(ms.calls[0].text, "<b>Report</b>"))
+	assert.Equal(t, "answer.md", docName)
+	assert.True(t, strings.HasPrefix(docBody, "**Report**\nrow of the report"))
+	assert.Equal(t, longAnswerCaption, docCaption)
+}
+
+func TestProcess_LongAnswerFallsBackToChunks(t *testing.T) {
+	ms := &mockSend{}
+	senders := sendfile.Senders{Doc: func(context.Context, int64, int, string, []byte, string) error {
+		return errors.New("too big")
+	}}
+	p := New(ms.fn(), senders, true)
+
+	text := longHTMLAnswer()
+	p.Process(context.Background(), &cli.Result{Text: text, FullText: text}, nil, Dest{ChatID: 1, ReplyTo: 9}, "/tmp", false)
+
+	assert.Greater(t, len(ms.calls), maxReplyChunks)
+	assert.Equal(t, 9, ms.calls[0].replyTo)
+	assert.Zero(t, ms.calls[1].replyTo)
+}
+
+func TestProcess_ShortAnswerStaysInChat(t *testing.T) {
+	ms := &mockSend{}
+	docSent := false
+	p := New(ms.fn(), sendfile.Senders{Doc: func(context.Context, int64, int, string, []byte, string) error {
+		docSent = true
+		return nil
+	}}, true)
+
+	text := strings.Repeat("line\n", 1200)
+	p.Process(context.Background(), &cli.Result{Text: text, FullText: text}, nil, Dest{ChatID: 1}, "/tmp", false)
+
+	assert.False(t, docSent)
+	assert.Len(t, ms.calls, 2)
+}
+
+func authHint(output string) string {
+	if strings.Contains(output, "Failed to authenticate") {
+		return "🔑 sign in again"
+	}
+	return ""
+}
+
+func TestProcess_FailureHintAddedToFailedRun(t *testing.T) {
+	ms := &mockSend{}
+	p := New(ms.fn(), sendfile.Senders{}, true)
+	p.SetFailureHint(authHint)
+
+	result := &cli.Result{Text: "Failed to authenticate: OAuth session expired"}
+	p.Process(context.Background(), result, errors.New("exit status 1"), Dest{ChatID: 100}, "/tmp", false)
+
+	require.Len(t, ms.calls, 1)
+	assert.Equal(t, "Failed to authenticate: OAuth session expired\n\n🔑 sign in again", ms.calls[0].text)
+}
+
+func TestProcess_FailureHintSentEvenWhenStreamed(t *testing.T) {
+	ms := &mockSend{}
+	p := New(ms.fn(), sendfile.Senders{}, true)
+	p.SetFailureHint(authHint)
+
+	result := &cli.Result{Text: "Failed to authenticate"}
+	p.Process(context.Background(), result, errors.New("exit status 1"), Dest{ChatID: 100}, "/tmp", true)
+
+	require.Len(t, ms.calls, 1)
+	assert.Equal(t, "🔑 sign in again", ms.calls[0].text)
+}
+
+func TestProcess_FailureHintIgnoredOnSuccess(t *testing.T) {
+	ms := &mockSend{}
+	p := New(ms.fn(), sendfile.Senders{}, true)
+	p.SetFailureHint(authHint)
+
+	result := &cli.Result{Text: "Failed to authenticate with Gmail, so here is what I could do", FullText: "x"}
+	p.Process(context.Background(), result, nil, Dest{ChatID: 100}, "/tmp", false)
+
+	require.Len(t, ms.calls, 1)
+	assert.NotContains(t, ms.calls[0].text, "sign in again")
 }

@@ -351,3 +351,46 @@ func TestWhisperSettings(t *testing.T) {
 	assert.Equal(t, "ru", WhisperLanguage())
 	assert.Equal(t, "/usr/bin/whisper", WhisperBin())
 }
+
+func TestReactions_DefaultsToEnabled(t *testing.T) {
+	viper.Reset()
+	assert.True(t, Reactions())
+
+	viper.Set("reactions", "false")
+	defer viper.Reset()
+	assert.False(t, Reactions())
+}
+
+func TestLiveDrafts_DefaultsToEnabled(t *testing.T) {
+	viper.Reset()
+	assert.True(t, LiveDrafts())
+
+	viper.Set("live_drafts", "false")
+	defer viper.Reset()
+	assert.False(t, LiveDrafts())
+}
+
+func TestAdminChatID_DefaultsToFirstPrivateWhitelistedChat(t *testing.T) {
+	viper.Reset()
+	defer viper.Reset()
+	viper.Set("telegram.whitelist_chat_ids", "-1001234,555,777")
+
+	assert.Equal(t, int64(555), AdminChatID())
+}
+
+func TestAdminChatID_Explicit(t *testing.T) {
+	viper.Reset()
+	defer viper.Reset()
+	viper.Set("telegram.whitelist_chat_ids", "555")
+	viper.Set("admin_chat_id", "999")
+
+	assert.Equal(t, int64(999), AdminChatID())
+}
+
+func TestAdminChatID_NoneWithoutPrivateChat(t *testing.T) {
+	viper.Reset()
+	defer viper.Reset()
+	viper.Set("telegram.whitelist_chat_ids", "-100")
+
+	assert.Zero(t, AdminChatID())
+}

@@ -18,8 +18,21 @@ type BlockExecutor interface {
 	ExecuteBlocks(text string, chatID int64, threadID int) string
 }
 
-// SendFunc sends a text message to a Telegram chat/thread with an optional parse mode.
-type SendFunc func(ctx context.Context, chatID int64, threadID int, text, parseMode string) error
+// Dest addresses a message: the chat, its forum thread and, when non-zero, the
+// message being answered.
+type Dest struct {
+	ChatID   int64
+	ThreadID int
+	ReplyTo  int
+}
+
+// SendFunc sends a text message to a destination with an optional parse mode.
+type SendFunc func(ctx context.Context, dest Dest, text, parseMode string) error
+
+const (
+	maxReplyChunks    = 3
+	longAnswerCaption = "📄 The full answer is in the file"
+)
 
 // Pipeline orchestrates post-Claude response processing: block execution,
 // stripping, status appending, file sending, and reply delivery.
@@ -30,6 +43,7 @@ type Pipeline struct {
 	webhooksConfigured bool
 	streamMessages     bool
 	dataDir            string
+	failureHint        func(output string) string
 }
 
 // New creates a Pipeline. Nil executors are silently filtered out.
@@ -66,6 +80,12 @@ func (p *Pipeline) SetDataDir(dir string) {
 	p.dataDir = dir
 }
 
+// SetFailureHint sets a function that, given the output of a failed run, returns a
+// note to add to its reply, or "" when there is nothing to add.
+func (p *Pipeline) SetFailureHint(hint func(output string) string) {
+	p.failureHint = hint
+}
+
 func (p *Pipeline) chatRoot(chatID int64, threadID int, dir string) string {
 	if p.dataDir == "" {
 		return dir
@@ -90,7 +110,7 @@ func (s *StreamState) Streamed() bool {
 // message is stripped of command blocks and sent as it arrives. Returns a
 // StreamState (nil if streaming was not attached) to pass alongside the eventual
 // Process call. The returned state must be read only after the CLI call returns.
-func (p *Pipeline) AttachStream(ctx context.Context, client cli.Client, chatID int64, threadID int) *StreamState {
+func (p *Pipeline) AttachStream(ctx context.Context, client cli.Client, dest Dest) *StreamState {
 	if p == nil || !p.streamMessages {
 		return nil
 	}
@@ -104,7 +124,7 @@ func (p *Pipeline) AttachStream(ctx context.Context, client cli.Client, chatID i
 	sc.OnMessage(func(msg string) {
 		if text := blocks.StripAll(msg); text != "" {
 			st.sent++
-			p.sendReply(ctx, chatID, threadID, text)
+			p.sendReply(ctx, dest, text)
 		}
 	})
 	return st
@@ -121,10 +141,13 @@ func (p *Pipeline) AttachStream(ctx context.Context, client cli.Client, chatID i
 // status messages are handled.
 func (p *Pipeline) Process(
 	ctx context.Context, result *cli.Result, cliErr error,
-	chatID int64, threadID int, dir string, streamed bool,
+	dest Dest, dir string, streamed bool,
 ) {
 	// Phase 1: Execute command blocks (only on success).
-	statusMsgs := p.executeBlocks(ctx, result, cliErr, chatID, threadID, dir)
+	statusMsgs := p.executeBlocks(ctx, result, cliErr, dest.ChatID, dest.ThreadID, dir)
+	if hint := p.hintFor(result, cliErr); hint != "" {
+		statusMsgs = append(statusMsgs, hint)
+	}
 
 	// Phase 2: Strip all command block syntax from each display message.
 	// When already streamed live, skip re-sending the display messages.
@@ -139,7 +162,8 @@ func (p *Pipeline) Process(
 	// Phase 4: Send each reply.
 	for _, text := range texts {
 		if text != "" {
-			p.sendReply(ctx, chatID, threadID, text)
+			p.sendReply(ctx, dest, text)
+			dest.ReplyTo = 0
 		}
 	}
 }
@@ -166,6 +190,13 @@ func (p *Pipeline) executeBlocks(
 	}
 
 	return statusMsgs
+}
+
+func (p *Pipeline) hintFor(result *cli.Result, cliErr error) string {
+	if cliErr == nil || p.failureHint == nil {
+		return ""
+	}
+	return p.failureHint(result.Text)
 }
 
 // displayTexts returns the stripped, non-empty messages to send. When stream
@@ -222,21 +253,38 @@ func appendStatusToLast(texts, msgs []string) []string {
 	return texts
 }
 
-func (p *Pipeline) sendReply(ctx context.Context, chatID int64, threadID int, text string) {
+func (p *Pipeline) sendReply(ctx context.Context, dest Dest, text string) {
 	log.Printf("pipeline: sending reply len=%d", len(text))
-	for _, chunk := range telegram.SplitMessage(text, telegram.MaxMessageLen) {
-		p.sendChunk(ctx, chatID, threadID, chunk)
+	chunks := telegram.SplitMessage(text, telegram.MaxMessageLen)
+	if len(chunks) <= maxReplyChunks || p.senders.Doc == nil {
+		p.sendChunks(ctx, dest, chunks)
+		return
+	}
+
+	p.sendChunk(ctx, dest, chunks[0])
+	file := []byte(telegram.Markdown(text))
+	if err := p.senders.Doc(ctx, dest.ChatID, dest.ThreadID, "answer.md", file, longAnswerCaption); err != nil {
+		log.Printf("pipeline: send long answer as file: %v", err)
+		dest.ReplyTo = 0
+		p.sendChunks(ctx, dest, chunks[1:])
 	}
 }
 
-func (p *Pipeline) sendChunk(ctx context.Context, chatID int64, threadID int, text string) {
-	err := p.send(ctx, chatID, threadID, text, "HTML")
+func (p *Pipeline) sendChunks(ctx context.Context, dest Dest, chunks []string) {
+	for _, chunk := range chunks {
+		p.sendChunk(ctx, dest, chunk)
+		dest.ReplyTo = 0
+	}
+}
+
+func (p *Pipeline) sendChunk(ctx context.Context, dest Dest, text string) {
+	err := p.send(ctx, dest, text, "HTML")
 	if err == nil {
 		return
 	}
 	log.Printf("pipeline: send parseMode=HTML error: %v", err)
 
-	if err := p.send(ctx, chatID, threadID, telegram.PlainText(text), ""); err != nil {
-		log.Printf("pipeline: failed to send message to chat=%d thread=%d as plain text: %v", chatID, threadID, err)
+	if err := p.send(ctx, dest, telegram.PlainText(text), ""); err != nil {
+		log.Printf("pipeline: failed to send message to chat=%d thread=%d as plain text: %v", dest.ChatID, dest.ThreadID, err)
 	}
 }

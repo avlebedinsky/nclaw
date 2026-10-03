@@ -186,7 +186,7 @@ func (m *Manager) runIncoming(ctx context.Context, wh *model.WebhookRegistration
 	sendCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
 
-	m.pipeline.Process(sendCtx, result, out.Err, wh.ChatID, wh.ThreadID, out.Dir, false)
+	m.pipeline.Process(sendCtx, result, out.Err, pipeline.Dest{ChatID: wh.ChatID, ThreadID: wh.ThreadID}, out.Dir, false)
 }
 
 func isSensitiveHeader(name string) bool {

@@ -50,7 +50,7 @@ var envCredentialVars = []string{"CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKE
 // It does nothing when credentials come from the environment, which the CLI prefers over
 // the credentials file.
 func EnsureValidToken() error {
-	if slices.ContainsFunc(envCredentialVars, func(name string) bool { return os.Getenv(name) != "" }) {
+	if credentialsFromEnv() {
 		return nil
 	}
 
@@ -64,6 +64,10 @@ func EnsureValidToken() error {
 	}
 
 	return refreshIfNeeded(credsPath)
+}
+
+func credentialsFromEnv() bool {
+	return slices.ContainsFunc(envCredentialVars, func(name string) bool { return os.Getenv(name) != "" })
 }
 
 func refreshIfNeeded(credsPath string) error {

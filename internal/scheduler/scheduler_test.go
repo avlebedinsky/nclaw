@@ -14,7 +14,9 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
+	"github.com/nickalie/nclaw/internal/chatqueue"
 	"github.com/nickalie/nclaw/internal/cli"
+	"github.com/nickalie/nclaw/internal/db"
 	"github.com/nickalie/nclaw/internal/invoker"
 	"github.com/nickalie/nclaw/internal/model"
 	"github.com/nickalie/nclaw/internal/pipeline"
@@ -905,6 +907,8 @@ type recordingClient struct {
 	systemPrompt string
 	query        string
 	mode         string
+	output       string
+	err          error
 }
 
 func (c *recordingClient) Dir(dir string) cli.Client {
@@ -927,6 +931,9 @@ func (c *recordingClient) run(mode, q string) (*cli.Result, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.mode, c.query = mode, q
+	if c.err != nil {
+		return &cli.Result{Text: c.output}, c.err
+	}
 	return &cli.Result{Text: "reply", FullText: "reply"}, nil
 }
 
@@ -953,7 +960,7 @@ func setupRecordingScheduler(t *testing.T) (*Scheduler, *recordingProvider, *inv
 	require.NoError(t, err)
 
 	var sent []string
-	p := pipeline.New(func(_ context.Context, _ int64, _ int, text, _ string) error {
+	p := pipeline.New(func(_ context.Context, _ pipeline.Dest, text, _ string) error {
 		sent = append(sent, text)
 		return nil
 	}, sendfile.Senders{}, false)
@@ -1019,4 +1026,92 @@ func TestExecuteTask_KeepsBoundedRunLogs(t *testing.T) {
 	var count int64
 	require.NoError(t, s.db.Model(&model.TaskRunLog{}).Where("task_id = ?", task.ID).Count(&count).Error)
 	assert.Equal(t, int64(keepRunLogs), count)
+}
+
+type countingRunner struct{ calls int }
+
+func (r *countingRunner) Do(_ chatqueue.Key, job chatqueue.Job) error {
+	r.calls++
+	job.Fn(context.Background())
+	return nil
+}
+
+func TestExecuteTask_NotifySendsPromptWithoutAgentOrQueue(t *testing.T) {
+	s, provider, _, sent := setupRecordingScheduler(t)
+	runner := &countingRunner{}
+	s.runner = runner
+	task := createRunnableTask(t, s, model.ContextNotify)
+
+	s.executeTask(task.ID)
+
+	assert.Empty(t, provider.client.mode)
+	assert.Zero(t, runner.calls)
+	assert.Equal(t, []string{"remind about water"}, *sent)
+
+	var logs []model.TaskRunLog
+	require.NoError(t, s.db.Where("task_id = ?", task.ID).Find(&logs).Error)
+	require.Len(t, logs, 1)
+	assert.Equal(t, "success", logs[0].Status)
+}
+
+func TestExecuteTask_NotifyIgnoresCommandBlocks(t *testing.T) {
+	s, _, _, sent := setupRecordingScheduler(t)
+	task := createRunnableTask(t, s, model.ContextNotify)
+	block := "```nclaw:schedule\n" + `{"action":"create","prompt":"x","type":"interval","value":"1m"}` + "\n```"
+	require.NoError(t, s.db.Model(task).Update("prompt", "hi\n"+block).Error)
+
+	s.executeTask(task.ID)
+
+	var count int64
+	require.NoError(t, s.db.Model(&model.ScheduledTask{}).Count(&count).Error)
+	assert.Equal(t, int64(1), count)
+	assert.Equal(t, []string{"hi"}, *sent)
+}
+
+func TestExecuteTask_FailureNamesTaskAndShowsOutput(t *testing.T) {
+	s, provider, _, sent := setupRecordingScheduler(t)
+	provider.client.err = errors.New("exit status 1")
+	provider.client.output = "Failed to authenticate"
+	task := createRunnableTask(t, s, model.ContextGroup)
+
+	s.executeTask(task.ID)
+
+	require.Len(t, *sent, 1)
+	msg := (*sent)[0]
+	assert.Contains(t, msg, "Scheduled task failed: remind about water")
+	assert.Contains(t, msg, "exit status 1")
+	assert.Contains(t, msg, "Failed to authenticate")
+	assert.NotContains(t, msg, "will not run again")
+}
+
+func TestExecuteTask_OnceFailureSaysItWillNotRepeat(t *testing.T) {
+	s, provider, _, sent := setupRecordingScheduler(t)
+	provider.client.err = errors.New("boom")
+	task := createRunnableTask(t, s, model.ContextIsolated)
+	require.NoError(t, s.db.Model(task).Updates(map[string]any{
+		"schedule_type": model.ScheduleOnce, "schedule_value": "2020-01-01T00:00:00",
+	}).Error)
+
+	s.executeTask(task.ID)
+
+	require.Len(t, *sent, 1)
+	assert.Contains(t, (*sent)[0], "It will not run again.")
+	got, err := db.GetTask(s.db, task.ID)
+	require.NoError(t, err)
+	assert.Equal(t, model.StatusFailed, got.Status)
+}
+
+func TestLoadTasks_DisablesUnloadableTaskAndTellsChat(t *testing.T) {
+	s, _, _, sent := setupRecordingScheduler(t)
+	task := createRunnableTask(t, s, model.ContextGroup)
+	require.NoError(t, s.db.Model(task).Update("schedule_type", "weekly").Error)
+
+	s.LoadTasks()
+
+	got, err := db.GetTask(s.db, task.ID)
+	require.NoError(t, err)
+	assert.Equal(t, model.StatusFailed, got.Status)
+	require.Len(t, *sent, 1)
+	assert.Contains(t, (*sent)[0], "could not be scheduled and was disabled: remind about water")
+	assert.Contains(t, (*sent)[0], `unknown schedule type "weekly"`)
 }

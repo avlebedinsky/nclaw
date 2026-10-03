@@ -13,6 +13,7 @@ import (
 	"github.com/go-telegram/bot/models"
 
 	"github.com/nickalie/nclaw/internal/chatqueue"
+	"github.com/nickalie/nclaw/internal/pipeline"
 )
 
 var commandRe = regexp.MustCompile(`^/([a-zA-Z0-9_]{1,32})(?:@([A-Za-z0-9_]+))?(?:\s|$)`)
@@ -23,6 +24,9 @@ var Commands = []models.BotCommand{
 	{Command: "new", Description: "Start a new conversation"},
 	{Command: "status", Description: "Show what the bot is doing in this chat"},
 }
+
+// LoginCommand is offered only in the admin chat, where /login works.
+var LoginCommand = models.BotCommand{Command: "login", Description: "Sign the bot in again"}
 
 func parseCommand(text, botUsername string) (name string, forMe, ok bool) {
 	m := commandRe.FindStringSubmatch(text)
@@ -50,6 +54,19 @@ func (h *Handler) Command(_ context.Context, _ *bot.Bot, update *models.Update) 
 	h.commandFunc(name)(key)
 }
 
+// MatchStopGeneration reports whether the user pressed the stop button of a live draft.
+func (h *Handler) MatchStopGeneration(update *models.Update) bool {
+	return update.StoppedMessageGeneration != nil
+}
+
+// StopGeneration handles the stop button of a live draft like /stop.
+func (h *Handler) StopGeneration(_ context.Context, _ *bot.Bot, update *models.Update) {
+	stopped := update.StoppedMessageGeneration
+	key := chatqueue.Key{ChatID: stopped.Chat.ID, ThreadID: stopped.MessageThreadID}
+	log.Printf("handler: draft %d stopped in chat=%d thread=%d", stopped.DraftID, key.ChatID, key.ThreadID)
+	h.stop(key)
+}
+
 func (h *Handler) commandFunc(name string) func(chatqueue.Key) {
 	switch name {
 	case "stop":
@@ -58,6 +75,11 @@ func (h *Handler) commandFunc(name string) func(chatqueue.Key) {
 		return h.newSession
 	case "status":
 		return h.status
+	case "login":
+		if h.Logins == nil {
+			return nil
+		}
+		return h.login
 	default:
 		return nil
 	}
@@ -102,7 +124,13 @@ func (h *Handler) newSession(key chatqueue.Key) {
 func (h *Handler) status(key chatqueue.Key) {
 	snap := h.Queue.Snapshot(key)
 	size, hasSize := h.Invoker.SessionSize(key.ChatID, key.ThreadID)
-	go h.notify(key, statusText(&snap, size, hasSize, h.Invoker.MaxSessionBytes(), h.Invoker.ProviderName()))
+	text := statusText(&snap, size, hasSize, h.Invoker.MaxSessionBytes(), h.Invoker.ProviderName())
+	if h.AuthStatus != nil {
+		if line := h.AuthStatus(); line != "" {
+			text += "\n" + line
+		}
+	}
+	go h.notify(key, text)
 }
 
 func statusText(snap *chatqueue.Snapshot, size int64, hasSize bool, maxBytes int64, backend string) string {
@@ -191,7 +219,7 @@ func (h *Handler) notify(key chatqueue.Key, text string) {
 func (h *Handler) notifyWithin(key chatqueue.Key, text string, timeout time.Duration) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	if err := h.Send(ctx, key.ChatID, key.ThreadID, text, ""); err != nil {
+	if err := h.Send(ctx, pipeline.Dest{ChatID: key.ChatID, ThreadID: key.ThreadID}, text, ""); err != nil {
 		log.Printf("handler: notify chat=%d thread=%d: %v", key.ChatID, key.ThreadID, err)
 	}
 }

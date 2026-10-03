@@ -99,13 +99,25 @@ func (s *Scheduler) LoadTasks() {
 	var loaded int
 	for i := range tasks {
 		if err := s.addJob(&tasks[i]); err != nil {
-			log.Printf("scheduler: load task %s: %v", tasks[i].ID, err)
+			s.disableUnloadable(&tasks[i], err)
 		} else {
 			loaded++
 		}
 	}
 
 	log.Printf("scheduler: loaded %d/%d active tasks", loaded, len(tasks))
+}
+
+func (s *Scheduler) disableUnloadable(task *model.ScheduledTask, err error) {
+	log.Printf("scheduler: load task %s: %v", task.ID, err)
+	if dbErr := db.UpdateTaskStatus(s.db, task.ID, model.StatusFailed); dbErr != nil {
+		log.Printf("scheduler: disable task %s: %v", task.ID, dbErr)
+	}
+	if s.pipeline == nil {
+		return
+	}
+	text := fmt.Sprintf("⚠️ A scheduled task could not be scheduled and was disabled: %s\n%v", truncate(task.Prompt, 80), err)
+	s.deliver(task, &cli.Result{Text: text}, nil, "")
 }
 
 // CreateTask persists a task and registers it with gocron.
@@ -261,6 +273,11 @@ func (s *Scheduler) executeTask(taskID string) {
 		return
 	}
 
+	if task.ContextMode == model.ContextNotify {
+		s.runTask(context.Background(), taskID)
+		return
+	}
+
 	key := chatqueue.Key{ChatID: task.ChatID, ThreadID: task.ThreadID}
 	job := chatqueue.Job{Kind: chatqueue.KindScheduled, Label: truncate(task.Prompt, 40), Fn: func(ctx context.Context) {
 		s.runTask(ctx, taskID)
@@ -292,7 +309,7 @@ func (s *Scheduler) runTask(ctx context.Context, taskID string) {
 		taskID, task.ScheduleType, task.ScheduleValue, truncate(task.Prompt, 60))
 
 	start := time.Now()
-	out := s.invokeCLI(ctx, task)
+	out := s.execute(ctx, task)
 	result, runErr := out.Result, out.Err
 	duration := time.Since(start)
 
@@ -348,6 +365,13 @@ func (s *Scheduler) clearRunState(taskID string) {
 	delete(s.running, taskID)
 	delete(s.canceled, taskID)
 	s.mu.Unlock()
+}
+
+func (s *Scheduler) execute(ctx context.Context, task *model.ScheduledTask) invoker.Outcome {
+	if task.ContextMode == model.ContextNotify {
+		return invoker.Outcome{Result: &cli.Result{Text: task.Prompt}}
+	}
+	return s.invokeCLI(ctx, task)
 }
 
 func (s *Scheduler) invokeCLI(ctx context.Context, task *model.ScheduledTask) invoker.Outcome {
@@ -442,16 +466,27 @@ func (s *Scheduler) sendResult(task *model.ScheduledTask, result *cli.Result, ru
 	}
 
 	if runErr != nil {
-		result = &cli.Result{
-			Text:     "Scheduled task error: " + runErr.Error(),
-			FullText: "Scheduled task error: " + runErr.Error(),
-		}
+		result = failureResult(task, result, runErr)
 	}
+	s.deliver(task, result, runErr, dir)
+}
 
+func (s *Scheduler) deliver(task *model.ScheduledTask, result *cli.Result, runErr error, dir string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	s.pipeline.Process(ctx, result, runErr, task.ChatID, task.ThreadID, dir, false)
+	s.pipeline.Process(ctx, result, runErr, pipeline.Dest{ChatID: task.ChatID, ThreadID: task.ThreadID}, dir, false)
+}
+
+func failureResult(task *model.ScheduledTask, result *cli.Result, runErr error) *cli.Result {
+	text := fmt.Sprintf("⚠️ Scheduled task failed: %s\n%v", truncate(task.Prompt, 80), runErr)
+	if task.ScheduleType == model.ScheduleOnce {
+		text += "\nIt will not run again."
+	}
+	if result != nil && strings.TrimSpace(result.Text) != "" {
+		text += "\n\n" + strings.TrimSpace(result.Text)
+	}
+	return &cli.Result{Text: text}
 }
 
 func (s *Scheduler) getNextRun(jobID uuid.UUID) *time.Time {
@@ -489,8 +524,8 @@ func FormatTaskList(database *gorm.DB, loc *time.Location, chatID int64, threadI
 			next = tasks[i].NextRun.In(loc).Format("2006-01-02 15:04:05")
 		}
 		prompt := truncate(tasks[i].Prompt, 80)
-		fmt.Fprintf(&b, "- [%s] %s (%s: %s) status=%s next=%s\n",
-			tasks[i].ID, prompt, tasks[i].ScheduleType, tasks[i].ScheduleValue, tasks[i].Status, next)
+		fmt.Fprintf(&b, "- [%s] %s (%s: %s) context=%s status=%s next=%s\n",
+			tasks[i].ID, prompt, tasks[i].ScheduleType, tasks[i].ScheduleValue, tasks[i].ContextMode, tasks[i].Status, next)
 	}
 	return b.String()
 }

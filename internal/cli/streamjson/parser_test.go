@@ -282,3 +282,22 @@ func TestToolEvent_Details(t *testing.T) {
 	assert.Equal(t, maxDetailRunes, len([]rune(long.Detail)))
 	assert.True(t, strings.HasSuffix(long.Detail, "…"))
 }
+
+func TestStreamWriter_ReportsPartialText(t *testing.T) {
+	var drafts []string
+	w := NewStreamWriter(nil).WithPartialHandler(func(s string) { drafts = append(drafts, s) })
+
+	output := `{"type":"stream_event","event":{"type":"message_start"}}` + "\n" +
+		`{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Hel"}}}` + "\n" +
+		`{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"lo"}}}` + "\n" +
+		`{"type":"stream_event","parent_tool_use_id":"toolu_1","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"subagent"}}}` + "\n" +
+		`{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{}"}}}` + "\n" +
+		`{"type":"stream_event","event":{"type":"message_start"}}` + "\n" +
+		`{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Done"}}}` + "\n" +
+		`{"type":"result","result":"Done"}` + "\n"
+	_, err := w.Write([]byte(output))
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"Hel", "Hello", "Done"}, drafts)
+	assert.Equal(t, "Done", w.Result().Text)
+}

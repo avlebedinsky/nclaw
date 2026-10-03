@@ -73,7 +73,7 @@ func newTestInvoker(t *testing.T, p cli.Provider) *invoker.Invoker {
 	})
 }
 
-func noopSend(_ context.Context, _ int64, _ int, _, _ string) error { return nil }
+func noopSend(_ context.Context, _ pipeline.Dest, _, _ string) error { return nil }
 
 func setupTestManager(t *testing.T) *Manager {
 	t.Helper()
@@ -596,7 +596,7 @@ func TestProcessIncoming_UsesSharedPromptAndDeliversReply(t *testing.T) {
 	provider := &mockProvider{}
 	m := NewManager(database, newTestInvoker(t, provider), inlineRunner{}, "example.com")
 	var sent []string
-	m.SetPipeline(pipeline.New(func(_ context.Context, _ int64, _ int, text, _ string) error {
+	m.SetPipeline(pipeline.New(func(_ context.Context, _ pipeline.Dest, text, _ string) error {
 		sent = append(sent, text)
 		return nil
 	}, sendfile.Senders{}, true))

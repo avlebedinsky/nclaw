@@ -62,6 +62,8 @@ The recommended way to run NClaw is inside Docker — the container serves as a 
 - **Voice messages** — Voice notes and video notes are transcribed locally with whisper.cpp and handled like typed messages.
 - **Ordered message queue** — Messages sent while the assistant is busy are answered in order, in a single combined run.
 - **Live progress** — A status message shows the agent's current step (e.g. "🔧 Bash: Run the test suite") while it works.
+- **Live answer and reactions** — In private chats the answer appears as it is being written (Claude backend), with a stop button. Messages get a reaction while they wait (👀), run (✍), succeed (👌) or fail (💔), and the answer is sent as a reply to the question.
+- **Long answers as a file** — An answer that would take more than three messages arrives as its beginning plus the full text in `answer.md`. Tables are rendered as aligned text, since Telegram cannot display them.
 - **Chat commands** — `/stop` cancels the current run, `/new` starts a fresh conversation, `/status` shows what the bot is doing.
 - **File delivery** — The assistant can send files back to you (generated reports, exports, code).
 - **Scheduled tasks** — Create recurring or one-time jobs using natural language.
@@ -191,7 +193,7 @@ docker run -d --name nclaw \
 
 Authenticate Claude Code with a long-lived token: run `claude setup-token` once on any machine where Claude Code is installed and pass the printed token as `CLAUDE_CODE_OAUTH_TOKEN`. The token is valid for a year and needs no refresh, so nclaw skips its own token refresh when it is set. The `./claude` volume keeps the agent's conversations, settings and skills across container restarts.
 
-Alternatively, log in inside the container once (`docker exec -it nclaw claude`, then `/login`); the credentials are stored in the `./claude` volume and refreshed automatically. Avoid bind-mounting the live `~/.claude/.credentials.json` of a machine where you also use Claude Code: both sides rotate the same refresh token and one of them gets logged out.
+Alternatively, log in inside the container once (`docker exec -it nclaw claude`, then `/login`); the credentials are stored in the `./claude` volume and refreshed automatically. Such a sign-in still ends on a fixed date (about a month after logging in) that refreshing does not move: nclaw warns the admin chat (`NCLAW_ADMIN_CHAT_ID`) 5, 2 and 1 day before it and when it has passed, `/status` shows the date, and a reply that fails because of the sign-in says so. To renew it, send `/login` in the admin chat: no shell access to the container is needed. Avoid bind-mounting the live `~/.claude/.credentials.json` of a machine where you also use Claude Code: both sides rotate the same refresh token and one of them gets logged out.
 
 ### Multi-Model
 
@@ -603,6 +605,8 @@ NClaw variables use the `NCLAW_` prefix. Provider API keys use the provider's na
 | `NCLAW_CLAUDE_EXEC_PATH` | No | `claude` | Full path to the Claude CLI binary |
 | `NCLAW_CLI_TIMEOUT` | No | `60m` | Maximum duration of one CLI run (Go duration, or a number of seconds; `0` disables). A run that exceeds it is stopped |
 | `NCLAW_PROGRESS` | No | `true` | Show a status message with the agent's current step while a request runs (Claude/Claudish backends) |
+| `NCLAW_LIVE_DRAFTS` | No | `true` | In private chats, show the answer as it is being written in a Telegram draft (Claude backend) |
+| `NCLAW_REACTIONS` | No | `true` | Mark messages with a reaction while they are queued, worked on, answered or failed |
 | `NCLAW_STARTUP_NOTIFICATION` | No | `false` | Send a "bot started" message to whitelisted chats on startup |
 | `NCLAW_STREAM_MESSAGES` | No | `false` | Send every intermediate assistant message as a separate reply instead of only the final one |
 | `NCLAW_WHISPER_MODEL` | No | set in the images | Path to a whisper.cpp ggml model; empty disables voice transcription |
@@ -612,6 +616,8 @@ NClaw variables use the `NCLAW_` prefix. Provider API keys use the provider's na
 | `NCLAW_MODEL` | No | — | Model for multi-model backend (e.g. `g@gemini-2.5-pro`). Setting this auto-selects multi-model |
 | `NCLAW_COPILOT_MODEL` | No | — | Model for Copilot backend (e.g. `gpt-4.1`). Only used when `NCLAW_CLI=copilot` |
 | `NCLAW_TELEGRAM_WHITELIST_CHAT_IDS` | No | — | Comma-separated list of allowed Telegram chat IDs. If unset, accepts all chats (with a security warning) |
+| `NCLAW_ADMIN_CHAT_ID` | No | first private chat in the whitelist | Chat that receives the bot's own alerts, such as the Claude sign-in about to expire. `/login` works only there, and only if it is a private chat |
+| `NCLAW_LOGIN_EMAIL` | No | — | Account email pre-filled on the sign-in page opened by `/login` |
 | `NCLAW_DB_PATH` | No | `{data_dir}/nclaw.db` | Path to the SQLite database |
 | `NCLAW_MAX_SESSION_BYTES` | No | `0` (disabled) | Claude Code session transcript size (bytes) past which nclaw archives the session and starts a fresh conversation for that chat/thread on the next message. Only applies to the `claude`/`claudish` backends |
 | `NCLAW_TIMEZONE` | No | system local | Timezone for the scheduler (e.g. `Europe/Berlin`) |
@@ -654,7 +660,8 @@ webhook:
 |---|---|
 | `/stop` | Cancels the current run in this chat (the agent's whole process tree is stopped) and drops queued messages and pending task/webhook runs |
 | `/new` | Starts a new conversation after the current queue: the previous session is archived (Claude/Claudish) or the next run starts without resuming (other backends) |
-| `/status` | Shows what is running and for how long, what is queued, the session size and the backend |
+| `/status` | Shows what is running and for how long, what is queued, the session size, the backend and when the Claude sign-in expires |
+| `/login` | Admin's private chat only (Claude backend): signs the bot in to Claude again. The bot sends a sign-in link; open it, sign in and send back the code shown at the end |
 
 Commands work while the assistant is busy and are registered in Telegram's command menu. In groups, `/command@yourbot` is supported; commands addressed to other bots are ignored.
 
@@ -676,7 +683,7 @@ Every morning at 8am, give me a weather summary and top news headlines
 At 3pm today, generate a summary of today's git commits
 ```
 
-Tasks persist across restarts. Each task can either continue the existing chat session or run in a fresh isolated context.
+Tasks persist across restarts. Each task can either continue the existing chat session or run in a fresh isolated context. Plain reminders ("remind me to…") are `notify` tasks: at the scheduled time the bot sends the prepared text right away, without running the agent, so they cost nothing and arrive on time even while the agent is busy. If a task fails, the chat gets a message naming the task and the error; a task that can no longer be scheduled after a restart is disabled and reported the same way.
 
 ## Webhooks
 

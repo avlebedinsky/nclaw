@@ -68,6 +68,28 @@ type SessionStore interface {
 	ArchiveSession(dir string) error
 }
 
+// AuthProvider is implemented by providers whose stored sign-in expires on a known date.
+type AuthProvider interface {
+	// AuthExpiry returns when the stored sign-in stops working; ok is false when it is unknown.
+	AuthExpiry() (expiry time.Time, ok bool)
+	// IsAuthFailure reports whether the output of a failed run is the backend's sign-in error.
+	IsAuthFailure(output string) bool
+}
+
+// LoginProvider is implemented by providers that can sign in again interactively.
+type LoginProvider interface {
+	// StartLogin starts a sign-in that lives until ctx is done and returns once its link is known.
+	StartLogin(ctx context.Context) (LoginSession, error)
+}
+
+// LoginSession is a sign-in waiting for the code the user gets after opening URL.
+type LoginSession interface {
+	URL() string
+	// Submit passes the code to the sign-in and waits for its outcome.
+	Submit(code string) error
+	Cancel()
+}
+
 // EphemeralClient is implemented by clients that can run without persisting the
 // session, so one-off runs leave no conversation behind.
 type EphemeralClient interface {
@@ -86,4 +108,13 @@ type ToolHandler func(ToolEvent)
 // ProgressClient is implemented by clients that report tool calls while running.
 type ProgressClient interface {
 	OnToolUse(handler ToolHandler) Client
+}
+
+// PartialHandler receives the text of the assistant message being generated, growing
+// as the CLI streams it.
+type PartialHandler func(text string)
+
+// PartialClient is implemented by clients that stream partial assistant text.
+type PartialClient interface {
+	OnPartialText(handler PartialHandler) Client
 }

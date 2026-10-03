@@ -15,6 +15,7 @@ import (
 
 	"github.com/nickalie/nclaw/internal/chatqueue"
 	"github.com/nickalie/nclaw/internal/cli"
+	"github.com/nickalie/nclaw/internal/pipeline"
 )
 
 type safeSent struct {
@@ -22,7 +23,7 @@ type safeSent struct {
 	msgs []string
 }
 
-func (s *safeSent) send(_ context.Context, _ int64, _ int, text, _ string) error {
+func (s *safeSent) send(_ context.Context, _ pipeline.Dest, text, _ string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.msgs = append(s.msgs, text)
@@ -174,6 +175,18 @@ func TestStatusCommand(t *testing.T) {
 
 	require.Eventually(t, func() bool { return len(sent.all()) == 1 }, 5*time.Second, 10*time.Millisecond)
 	assert.Equal(t, "💤 Idle.\nBackend: mock.", sent.all()[0])
+}
+
+func TestStatusCommand_ShowsSignInExpiry(t *testing.T) {
+	sent := &safeSent{}
+	h := newTestHandler(t, &mockProvider{client: &mockClient{}}, nil)
+	h.Send = sent.send
+	h.AuthStatus = func() string { return "Claude sign-in: valid until Fri 9 Oct 18:06 MSK (5 days left)." }
+
+	h.Command(context.Background(), nil, commandUpdate("/status"))
+
+	require.Eventually(t, func() bool { return len(sent.all()) == 1 }, 5*time.Second, 10*time.Millisecond)
+	assert.Equal(t, "💤 Idle.\nBackend: mock.\nClaude sign-in: valid until Fri 9 Oct 18:06 MSK (5 days left).", sent.all()[0])
 }
 
 func TestHumanBytes(t *testing.T) {

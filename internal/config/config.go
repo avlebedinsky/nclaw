@@ -70,6 +70,27 @@ func WhitelistChatIDs() []int64 {
 	return ids
 }
 
+// AdminChatID returns the chat that receives the bot's own alerts, such as an expiring
+// sign-in (env: NCLAW_ADMIN_CHAT_ID). By default it is the first private chat (positive
+// ID) in the whitelist; 0 means there is none.
+func AdminChatID() int64 {
+	if viper.IsSet("admin_chat_id") {
+		return viper.GetInt64("admin_chat_id")
+	}
+	for _, id := range WhitelistChatIDs() {
+		if id > 0 {
+			return id
+		}
+	}
+	return 0
+}
+
+// LoginEmail returns the account email pre-filled on the sign-in page opened by /login
+// (env: NCLAW_LOGIN_EMAIL).
+func LoginEmail() string {
+	return viper.GetString("login_email")
+}
+
 // StartupNotification reports whether the bot should send a startup
 // notification message to whitelisted chats (env: NCLAW_STARTUP_NOTIFICATION).
 // Disabled by default.
@@ -84,6 +105,24 @@ func Progress() bool {
 		return true
 	}
 	return viper.GetBool("progress")
+}
+
+// LiveDrafts reports whether private chats see the answer being written in a live
+// Telegram draft (env: NCLAW_LIVE_DRAFTS). Enabled by default.
+func LiveDrafts() bool {
+	if !viper.IsSet("live_drafts") {
+		return true
+	}
+	return viper.GetBool("live_drafts")
+}
+
+// Reactions reports whether the bot marks messages with reactions while it queues,
+// works on and answers them (env: NCLAW_REACTIONS). Enabled by default.
+func Reactions() bool {
+	if !viper.IsSet("reactions") {
+		return true
+	}
+	return viper.GetBool("reactions")
 }
 
 // StreamMessages reports whether every assistant message from the CLI's JSON

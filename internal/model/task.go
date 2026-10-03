@@ -25,6 +25,7 @@ const (
 const (
 	ContextGroup    = "group"
 	ContextIsolated = "isolated"
+	ContextNotify   = "notify"
 )
 
 // ScheduledTask represents a scheduled task persisted in the database.

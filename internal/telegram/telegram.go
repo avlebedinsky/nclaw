@@ -18,8 +18,15 @@ Rules:
 - Escape &, < and > in regular text as &amp; &lt; &gt; (but not inside tags themselves)
 - Do NOT use <p>, <br>, <div>, <h1>-<h6>, <ul>, <li>, <ol>, <table>, or any other HTML tags
 - For lists, use plain text with bullet characters or numbers
+- Telegram cannot display tables (neither HTML nor Markdown ones):
+  put tabular data inside <pre> with columns aligned by spaces, or use a list
 - For section titles, use <b>bold text</b> on its own line
-- Keep formatting minimal and clean`
+- Keep formatting minimal and clean
+
+When a tool or connector fails because it has to be signed in again (re-authorization
+required, expired OAuth, 401), do not retry it: tell the user in one line which connector
+to reconnect and where (claude.ai connectors: claude.ai → Settings → Connectors), then
+carry on without it.`
 
 // MaxMessageLen is the Telegram message size limit in characters.
 const MaxMessageLen = 4096

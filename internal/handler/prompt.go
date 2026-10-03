@@ -17,6 +17,7 @@ const (
 
 // Inbound is a user message waiting in its chat's queue.
 type Inbound struct {
+	msgID      int
 	text       string
 	att        *attachment
 	mediaGroup string
@@ -27,7 +28,7 @@ func newInbound(msg *models.Message) (Inbound, bool) {
 	if text == "" && att == nil {
 		return Inbound{}, false
 	}
-	return Inbound{text: withReplyContext(msg, text), att: att, mediaGroup: msg.MediaGroupID}, true
+	return Inbound{msgID: msg.ID, text: withReplyContext(msg, text), att: att, mediaGroup: msg.MediaGroupID}, true
 }
 
 func settleFor(msg *models.Message) time.Duration {

@@ -623,7 +623,7 @@ func waitQueue(t *testing.T, h *Handler) {
 }
 
 func recordSend(sent *[]string) pipeline.SendFunc {
-	return func(_ context.Context, _ int64, _ int, text, _ string) error {
+	return func(_ context.Context, _ pipeline.Dest, text, _ string) error {
 		*sent = append(*sent, text)
 		return nil
 	}
@@ -1142,4 +1142,174 @@ func TestExtractAttachment_SpeechFlags(t *testing.T) {
 
 	assert.False(t, extractAttachment(&models.Message{Audio: &models.Audio{FileID: "a"}}).speech)
 	assert.False(t, extractAttachment(&models.Message{Document: &models.Document{FileID: "d"}}).speech)
+}
+
+// --- reactions and replies ---
+
+type reactionLog struct {
+	mu  sync.Mutex
+	got []string
+}
+
+func (r *reactionLog) react(_ context.Context, _ int64, msgID int, emoji string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.got = append(r.got, fmt.Sprintf("%d:%s", msgID, emoji))
+	return nil
+}
+
+func (r *reactionLog) all() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.got...)
+}
+
+func TestRunBatch_ReactsAndRepliesToLastMessage(t *testing.T) {
+	client := &mockClient{contResult: &cli.Result{Text: "done", FullText: "done"}}
+	var dests []pipeline.Dest
+	h := newTestHandler(t, &mockProvider{client: client}, func(_ context.Context, d pipeline.Dest, _, _ string) error {
+		dests = append(dests, d)
+		return nil
+	})
+	reactions := &reactionLog{}
+	h.React = reactions.react
+
+	h.RunBatch(context.Background(), testKey, []Inbound{{msgID: 10, text: "a"}, {msgID: 11, text: "b"}})
+
+	require.Len(t, dests, 1)
+	assert.Equal(t, pipeline.Dest{ChatID: 100, ReplyTo: 11}, dests[0])
+	assert.Equal(t, []string{"10:✍", "11:✍", "10:👌", "11:👌"}, reactions.all())
+}
+
+func TestRunBatch_ReactionOnFailureAndStop(t *testing.T) {
+	cases := map[string]struct {
+		err  error
+		want string
+	}{
+		"failure": {fmt.Errorf("boom"), "7:💔"},
+		"stopped": {fmt.Errorf("claude: %w", chatqueue.ErrStopped), "7:"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			h := newTestHandler(t, &mockProvider{client: &mockClient{contErr: tc.err}}, func(context.Context, pipeline.Dest, string, string) error { return nil })
+			reactions := &reactionLog{}
+			h.React = reactions.react
+
+			h.RunBatch(context.Background(), testKey, []Inbound{{msgID: 7, text: "x"}})
+
+			assert.Equal(t, []string{"7:✍", tc.want}, reactions.all())
+		})
+	}
+}
+
+func TestDefault_ReactsWhenQueued(t *testing.T) {
+	block := make(chan struct{})
+	defer close(block)
+	h := newTestHandler(t, &mockProvider{client: &mockClient{}}, nil)
+	h.Queue = chatqueue.New(func(context.Context, chatqueue.Key, []Inbound) { <-block }, chatqueue.Options{})
+	reactions := &reactionLog{}
+	h.React = reactions.react
+
+	h.Default(context.Background(), nil, &models.Update{Message: &models.Message{ID: 5, Text: "hi", Chat: models.Chat{ID: 100}}})
+
+	assert.Eventually(t, func() bool { return len(reactions.all()) == 1 }, 2*time.Second, 5*time.Millisecond)
+	assert.Equal(t, []string{"5:👀"}, reactions.all())
+}
+
+// --- live drafts ---
+
+type partialClient struct {
+	mockClient
+	onPartial cli.PartialHandler
+}
+
+func (c *partialClient) Context(context.Context) cli.Client   { return c }
+func (c *partialClient) Dir(string) cli.Client                { return c }
+func (c *partialClient) SkipPermissions() cli.Client          { return c }
+func (c *partialClient) AppendSystemPrompt(string) cli.Client { return c }
+func (c *partialClient) OnPartialText(h cli.PartialHandler) cli.Client {
+	c.onPartial = h
+	return c
+}
+func (c *partialClient) Continue(string) (*cli.Result, error) {
+	time.Sleep(30 * time.Millisecond)
+	c.onPartial("<b>Almost</b> there")
+	time.Sleep(1500 * time.Millisecond)
+	return &cli.Result{Text: "final", FullText: "final"}, nil
+}
+
+type partialProvider struct {
+	mockProvider
+	client *partialClient
+}
+
+func (p *partialProvider) NewClient() cli.Client { return p.client }
+
+type draftLog struct {
+	mu    sync.Mutex
+	texts []string
+}
+
+func (d *draftLog) SendDraft(_ context.Context, _ int64, _ int, _ int64, text string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.texts = append(d.texts, text)
+	return nil
+}
+
+func (d *draftLog) all() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]string(nil), d.texts...)
+}
+
+func TestRunBatch_LiveDraftInPrivateChat(t *testing.T) {
+	drafts := &draftLog{}
+	sent := &safeSent{}
+	h := newTestHandler(t, &partialProvider{client: &partialClient{}}, sent.send)
+	h.Drafts = drafts
+
+	h.RunBatch(context.Background(), chatqueue.Key{ChatID: 100}, []Inbound{{text: "go"}})
+
+	assert.Equal(t, []string{"", "Almost there"}, drafts.all())
+	assert.Equal(t, []string{"final"}, sent.all())
+}
+
+func TestRunBatch_NoDraftInGroups(t *testing.T) {
+	drafts := &draftLog{}
+	h := newTestHandler(t, &mockProvider{client: &mockClient{contResult: &cli.Result{Text: "ok"}}}, func(context.Context, pipeline.Dest, string, string) error { return nil })
+	h.Drafts = drafts
+
+	h.RunBatch(context.Background(), chatqueue.Key{ChatID: -100123}, []Inbound{{text: "go"}})
+
+	assert.Empty(t, drafts.all())
+}
+
+func TestStopGeneration_StopsTheChat(t *testing.T) {
+	client := &blockingClient{started: make(chan struct{})}
+	sent := &safeSent{}
+	h := newTestHandler(t, &blockingProvider{client: client}, sent.send)
+	h.Send = sent.send
+
+	h.Default(context.Background(), nil, commandUpdate("long job"))
+	<-client.started
+	update := &models.Update{StoppedMessageGeneration: &models.MessageGenerationStopped{Chat: models.Chat{ID: 100}, DraftID: 1}}
+	require.True(t, h.MatchStopGeneration(update))
+	h.StopGeneration(context.Background(), nil, update)
+	waitQueue(t, h)
+
+	require.Eventually(t, func() bool { return len(sent.all()) == 1 }, 5*time.Second, 10*time.Millisecond)
+	assert.Contains(t, sent.all()[0], "⏹ Stopped your request")
+}
+
+func TestAllowChat_PassesStopButtonFromWhitelistedChat(t *testing.T) {
+	viper.Set("telegram.whitelist_chat_ids", "100")
+	defer viper.Reset()
+
+	var passed int
+	next := AllowChat(func(context.Context, *bot.Bot, *models.Update) { passed++ })
+	next(context.Background(), nil, &models.Update{StoppedMessageGeneration: &models.MessageGenerationStopped{Chat: models.Chat{ID: 100}}})
+	next(context.Background(), nil, &models.Update{StoppedMessageGeneration: &models.MessageGenerationStopped{Chat: models.Chat{ID: 5}}})
+
+	assert.Equal(t, 1, passed)
 }
