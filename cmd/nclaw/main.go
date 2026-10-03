@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"time"
 
 	"github.com/go-telegram/bot"
@@ -23,6 +24,7 @@ import (
 	"github.com/nickalie/nclaw/internal/config"
 	"github.com/nickalie/nclaw/internal/db"
 	"github.com/nickalie/nclaw/internal/handler"
+	"github.com/nickalie/nclaw/internal/invoker"
 	"github.com/nickalie/nclaw/internal/pipeline"
 	"github.com/nickalie/nclaw/internal/scheduler"
 	"github.com/nickalie/nclaw/internal/sendfile"
@@ -77,7 +79,11 @@ func main() {
 
 func setupBot(database *gorm.DB, provider cli.Provider) (*bot.Bot, *scheduler.Scheduler, *webhook.Manager, *webhook.Server) {
 	chatLocker := telegram.NewChatLocker()
-	h := &handler.Handler{Provider: provider, ChatLocker: chatLocker}
+	var sched *scheduler.Scheduler
+	inv := invoker.New(provider, chatLocker, invokerOptions(func(chatID int64, threadID int) string {
+		return sched.FormatTaskList(chatID, threadID)
+	}))
+	h := &handler.Handler{Invoker: inv}
 
 	b, err := bot.New(config.TelegramBotToken(),
 		bot.WithDefaultHandler(h.Default),
@@ -91,12 +97,10 @@ func setupBot(database *gorm.DB, provider cli.Provider) (*bot.Bot, *scheduler.Sc
 		Doc:   newSendDocFunc(b),
 		Audio: newSendAudioFunc(b),
 	}
-	sched, err := scheduler.New(database, provider, config.Timezone(), config.DataDir(), chatLocker)
+	sched, err = scheduler.New(database, provider, config.Timezone(), config.DataDir(), chatLocker)
 	if err != nil {
 		log.Fatal("scheduler: ", err)
 	}
-
-	h.Scheduler = sched
 
 	webhookMgr := createWebhookManager(database, provider, chatLocker)
 	p := buildPipeline(b, fileSenders, sched, webhookMgr)
@@ -115,6 +119,19 @@ func setupBot(database *gorm.DB, provider cli.Provider) (*bot.Bot, *scheduler.Sc
 	webhookSrv := startWebhookServer(webhookMgr)
 
 	return b, sched, webhookMgr, webhookSrv
+}
+
+func invokerOptions(taskList invoker.TaskListFunc) invoker.Options {
+	opts := invoker.Options{
+		DataDir:         config.DataDir(),
+		MaxSessionBytes: config.MaxSessionBytes(),
+		Location:        config.Location(),
+		TaskList:        taskList,
+	}
+	if dir, err := claude.ConfigDir(); err == nil {
+		opts.SkillsDir = filepath.Join(dir, "skills")
+	}
+	return opts
 }
 
 func buildPipeline(

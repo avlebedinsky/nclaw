@@ -178,6 +178,16 @@ func CopilotModel() string {
 	return viper.GetString("copilot_model")
 }
 
+// Location returns the configured timezone, falling back to the system local zone when it is invalid.
+func Location() *time.Location {
+	loc, err := time.LoadLocation(Timezone())
+	if err != nil {
+		log.Printf("config: invalid timezone %q, falling back to local: %v", Timezone(), err)
+		return time.Local
+	}
+	return loc
+}
+
 // Timezone returns the configured timezone name, defaulting to system local.
 func Timezone() string {
 	if tz := viper.GetString("timezone"); tz != "" {

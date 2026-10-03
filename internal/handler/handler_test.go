@@ -19,15 +19,11 @@ import (
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
 
 	"github.com/nickalie/nclaw/internal/cli"
 	"github.com/nickalie/nclaw/internal/config"
-	"github.com/nickalie/nclaw/internal/model"
+	"github.com/nickalie/nclaw/internal/invoker"
 	"github.com/nickalie/nclaw/internal/pipeline"
-	"github.com/nickalie/nclaw/internal/scheduler"
 	"github.com/nickalie/nclaw/internal/sendfile"
 	"github.com/nickalie/nclaw/internal/telegram"
 )
@@ -608,27 +604,23 @@ func newTestBot(t *testing.T) *bot.Bot {
 	return b
 }
 
-// setupTestScheduler creates a minimal scheduler backed by an in-memory DB.
-func setupTestScheduler(t *testing.T) *scheduler.Scheduler {
+func newTestHandler(t *testing.T, provider cli.Provider, send pipeline.SendFunc) *Handler {
 	t.Helper()
-	database, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Silent),
-	})
-	require.NoError(t, err)
-	require.NoError(t, database.AutoMigrate(&model.ScheduledTask{}, &model.TaskRunLog{}))
+	inv := invoker.New(provider, telegram.NewChatLocker(), invoker.Options{DataDir: t.TempDir()})
+	return &Handler{Invoker: inv, Pipeline: pipeline.New(send, sendfile.Senders{}, false)}
+}
 
-	sched, err := scheduler.New(database, &mockProvider{client: &mockClient{}}, "UTC", t.TempDir(), telegram.NewChatLocker())
-	require.NoError(t, err)
-	return sched
+func recordSend(sent *[]string) pipeline.SendFunc {
+	return func(_ context.Context, _ int64, _ int, text, _ string) error {
+		*sent = append(*sent, text)
+		return nil
+	}
 }
 
 // --- Default tests ---
 
 func TestDefault_NilMessage(t *testing.T) {
-	h := &Handler{
-		Provider:   &mockProvider{client: &mockClient{}},
-		ChatLocker: telegram.NewChatLocker(),
-	}
+	h := &Handler{}
 	update := &models.Update{Message: nil}
 	// Should return immediately without panic.
 	h.Default(context.Background(), newTestBot(t), update)
@@ -638,10 +630,7 @@ func TestDefault_NonWhitelisted(t *testing.T) {
 	viper.Set("telegram.whitelist_chat_ids", "111,222")
 	defer viper.Reset()
 
-	h := &Handler{
-		Provider:   &mockProvider{client: &mockClient{}},
-		ChatLocker: telegram.NewChatLocker(),
-	}
+	h := &Handler{}
 	update := &models.Update{
 		Message: &models.Message{
 			Text: "hello",
@@ -655,10 +644,7 @@ func TestDefault_NonWhitelisted(t *testing.T) {
 func TestDefault_EmptyMessage(t *testing.T) {
 	viper.Reset()
 
-	h := &Handler{
-		Provider:   &mockProvider{client: &mockClient{}},
-		ChatLocker: telegram.NewChatLocker(),
-	}
+	h := &Handler{}
 	update := &models.Update{
 		Message: &models.Message{
 			Chat: models.Chat{ID: 100},
@@ -666,128 +652,6 @@ func TestDefault_EmptyMessage(t *testing.T) {
 	}
 	// Empty message (no text, no attachment) should return early.
 	h.Default(context.Background(), newTestBot(t), update)
-}
-
-// --- callCLI tests ---
-
-func TestCallCLI_Success(t *testing.T) {
-	viper.Set("data_dir", t.TempDir())
-	defer viper.Reset()
-
-	client := &mockClient{
-		contResult: &cli.Result{Text: "response text", FullText: "response text"},
-	}
-	provider := &mockProvider{client: client, name: "test-cli"}
-	sched := setupTestScheduler(t)
-
-	h := &Handler{
-		Provider:   provider,
-		Scheduler:  sched,
-		ChatLocker: telegram.NewChatLocker(),
-	}
-
-	result, _, err := h.callCLI(context.Background(), t.TempDir(), "hello prompt", 100, 0)
-	assert.NoError(t, err)
-	assert.NotNil(t, result)
-	assert.Equal(t, "response text", result.Text)
-	assert.Equal(t, "hello prompt", client.lastQuery)
-	assert.True(t, client.skipPerms, "SkipPermissions should be called")
-	assert.Contains(t, client.systemPrompt, "Telegram")
-}
-
-func TestCallCLI_Error(t *testing.T) {
-	viper.Set("data_dir", t.TempDir())
-	defer viper.Reset()
-
-	client := &mockClient{
-		contResult: nil,
-		contErr:    fmt.Errorf("cli failed"),
-	}
-	provider := &mockProvider{client: client, name: "test-cli"}
-	sched := setupTestScheduler(t)
-
-	h := &Handler{
-		Provider:   provider,
-		Scheduler:  sched,
-		ChatLocker: telegram.NewChatLocker(),
-	}
-
-	result, _, err := h.callCLI(context.Background(), t.TempDir(), "hello", 100, 0)
-	assert.Error(t, err)
-	assert.NotNil(t, result)
-	assert.Contains(t, result.Text, "error: cli failed")
-}
-
-func TestCallCLI_ErrorWithPartialResult(t *testing.T) {
-	viper.Set("data_dir", t.TempDir())
-	defer viper.Reset()
-
-	client := &mockClient{
-		contResult: &cli.Result{Text: "partial output", FullText: "partial output"},
-		contErr:    fmt.Errorf("timeout"),
-	}
-	provider := &mockProvider{client: client, name: "test-cli"}
-	sched := setupTestScheduler(t)
-
-	h := &Handler{
-		Provider:   provider,
-		Scheduler:  sched,
-		ChatLocker: telegram.NewChatLocker(),
-	}
-
-	result, _, err := h.callCLI(context.Background(), t.TempDir(), "hello", 100, 0)
-	assert.Error(t, err)
-	assert.NotNil(t, result)
-	// When result has text, it should keep the partial output, not replace with error.
-	assert.Equal(t, "partial output", result.Text)
-}
-
-func TestCallCLI_PreInvokeError(t *testing.T) {
-	viper.Set("data_dir", t.TempDir())
-	defer viper.Reset()
-
-	client := &mockClient{
-		contResult: &cli.Result{Text: "ok", FullText: "ok"},
-	}
-	provider := &mockProvider{
-		client:       client,
-		name:         "test-cli",
-		preInvokeErr: fmt.Errorf("token refresh failed"),
-	}
-	sched := setupTestScheduler(t)
-
-	h := &Handler{
-		Provider:   provider,
-		Scheduler:  sched,
-		ChatLocker: telegram.NewChatLocker(),
-	}
-
-	// PreInvoke error should be logged as warning but not block the CLI call.
-	result, _, err := h.callCLI(context.Background(), t.TempDir(), "hello", 100, 0)
-	assert.NoError(t, err)
-	assert.Equal(t, "ok", result.Text)
-}
-
-func TestCallCLI_SystemPromptIncludesTaskList(t *testing.T) {
-	viper.Set("data_dir", t.TempDir())
-	defer viper.Reset()
-
-	client := &mockClient{
-		contResult: &cli.Result{Text: "done", FullText: "done"},
-	}
-	provider := &mockProvider{client: client, name: "test-cli"}
-	sched := setupTestScheduler(t)
-
-	h := &Handler{
-		Provider:   provider,
-		Scheduler:  sched,
-		ChatLocker: telegram.NewChatLocker(),
-	}
-
-	_, _, _ = h.callCLI(context.Background(), t.TempDir(), "test", 100, 0)
-	// System prompt should include both the Telegram formatting prompt and task list.
-	assert.Contains(t, client.systemPrompt, telegram.Prompt)
-	assert.Contains(t, client.systemPrompt, "Current scheduled tasks:")
 }
 
 // --- buildPrompt tests ---
@@ -874,70 +738,51 @@ func TestBuildPrompt_WithAttachmentNoText(t *testing.T) {
 // --- processMessage tests ---
 
 func TestProcessMessage_Success(t *testing.T) {
-	viper.Set("data_dir", t.TempDir())
-	defer viper.Reset()
+	client := &mockClient{contResult: &cli.Result{Text: "cli response", FullText: "cli response"}}
+	var sent []string
+	h := newTestHandler(t, &mockProvider{client: client}, recordSend(&sent))
 
-	var sentText string
-	sendFn := func(_ context.Context, chatID int64, threadID int, text, parseMode string) error {
-		sentText = text
-		return nil
-	}
-
-	client := &mockClient{
-		contResult: &cli.Result{Text: "cli response", FullText: "cli response"},
-	}
-	provider := &mockProvider{client: client, name: "test-cli"}
-	sched := setupTestScheduler(t)
-	pipe := pipeline.New(sendFn, sendfile.Senders{}, false)
-
-	h := &Handler{
-		Provider:   provider,
-		Scheduler:  sched,
-		Pipeline:   pipe,
-		ChatLocker: telegram.NewChatLocker(),
-	}
-
-	msg := &models.Message{
-		Text: "hello",
-		Chat: models.Chat{ID: 100},
-	}
-
+	msg := &models.Message{Text: "hello", Chat: models.Chat{ID: 100}}
 	h.processMessage(context.Background(), newTestBot(t), msg, "hello", nil)
-	assert.Equal(t, "cli response", sentText)
+
+	assert.Equal(t, []string{"cli response"}, sent)
+	assert.True(t, strings.HasSuffix(client.lastQuery, "\n\nhello"))
+	assert.Equal(t, h.Invoker.ChatDir(100, 0), client.dir)
+	assert.Contains(t, client.systemPrompt, telegram.Prompt)
 }
 
 func TestProcessMessage_CLIError(t *testing.T) {
-	viper.Set("data_dir", t.TempDir())
-	defer viper.Reset()
+	client := &mockClient{contErr: fmt.Errorf("boom")}
+	var sent []string
+	h := newTestHandler(t, &mockProvider{client: client}, recordSend(&sent))
 
-	var sentText string
-	sendFn := func(_ context.Context, chatID int64, threadID int, text, parseMode string) error {
-		sentText = text
-		return nil
-	}
-
-	client := &mockClient{
-		contResult: nil,
-		contErr:    fmt.Errorf("boom"),
-	}
-	provider := &mockProvider{client: client, name: "test-cli"}
-	sched := setupTestScheduler(t)
-	pipe := pipeline.New(sendFn, sendfile.Senders{}, false)
-
-	h := &Handler{
-		Provider:   provider,
-		Scheduler:  sched,
-		Pipeline:   pipe,
-		ChatLocker: telegram.NewChatLocker(),
-	}
-
-	msg := &models.Message{
-		Text: "hello",
-		Chat: models.Chat{ID: 100},
-	}
-
+	msg := &models.Message{Text: "hello", Chat: models.Chat{ID: 100}}
 	h.processMessage(context.Background(), newTestBot(t), msg, "hello", nil)
-	assert.Contains(t, sentText, "error: boom")
+
+	require.Len(t, sent, 1)
+	assert.Contains(t, sent[0], "error: boom")
+}
+
+func TestProcessMessage_CLIErrorKeepsPartialOutput(t *testing.T) {
+	client := &mockClient{contResult: &cli.Result{Text: "partial output", FullText: "partial output"}, contErr: fmt.Errorf("timeout")}
+	var sent []string
+	h := newTestHandler(t, &mockProvider{client: client}, recordSend(&sent))
+
+	msg := &models.Message{Text: "hello", Chat: models.Chat{ID: 100}}
+	h.processMessage(context.Background(), newTestBot(t), msg, "hello", nil)
+
+	assert.Equal(t, []string{"partial output"}, sent)
+}
+
+func TestProcessMessage_IncludesReplyContext(t *testing.T) {
+	client := &mockClient{contResult: &cli.Result{Text: "ok", FullText: "ok"}}
+	var sent []string
+	h := newTestHandler(t, &mockProvider{client: client}, recordSend(&sent))
+
+	msg := &models.Message{Text: "and this?", Chat: models.Chat{ID: 100}, ReplyToMessage: &models.Message{Text: "earlier"}}
+	h.processMessage(context.Background(), newTestBot(t), msg, "and this?", nil)
+
+	assert.Contains(t, client.lastQuery, "[Replying to message: earlier]\n\nand this?")
 }
 
 // --- sendTyping tests ---
@@ -1076,71 +921,4 @@ func TestFetchToFile_ErrorOmitsURL(t *testing.T) {
 
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "SECRET")
-}
-
-// --- provider capability tests ---
-
-type sessionProvider struct {
-	mockProvider
-	size     int64
-	archived []string
-}
-
-func (p *sessionProvider) NativeSkills() bool { return true }
-func (p *sessionProvider) SessionSize(string) (int64, bool) {
-	return p.size, p.size > 0
-}
-func (p *sessionProvider) ArchiveSession(dir string) error {
-	p.archived = append(p.archived, dir)
-	return nil
-}
-
-func TestMaybeResetSession_ArchivesOversizedSession(t *testing.T) {
-	viper.Set("max_session_bytes", 100)
-	defer viper.Reset()
-
-	p := &sessionProvider{size: 150}
-	(&Handler{Provider: p}).maybeResetSession("/data/1")
-
-	assert.Equal(t, []string{"/data/1"}, p.archived)
-}
-
-func TestMaybeResetSession_KeepsSmallSession(t *testing.T) {
-	viper.Set("max_session_bytes", 100)
-	defer viper.Reset()
-
-	p := &sessionProvider{size: 50}
-	(&Handler{Provider: p}).maybeResetSession("/data/1")
-
-	assert.Empty(t, p.archived)
-}
-
-func TestMaybeResetSession_DisabledByDefault(t *testing.T) {
-	p := &sessionProvider{size: 1 << 30}
-	(&Handler{Provider: p}).maybeResetSession("/data/1")
-
-	assert.Empty(t, p.archived)
-}
-
-func writeSkill(t *testing.T) {
-	t.Helper()
-	configDir := t.TempDir()
-	t.Setenv("CLAUDE_CONFIG_DIR", configDir)
-	skillDir := filepath.Join(configDir, "skills", "demo")
-	require.NoError(t, os.MkdirAll(skillDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("demo skill body"), 0o644))
-}
-
-func TestSkillsPrompt_InjectedForNonNativeProvider(t *testing.T) {
-	writeSkill(t)
-	h := &Handler{Provider: &mockProvider{name: "claude"}}
-
-	assert.Contains(t, h.skillsPrompt(), "demo skill body")
-}
-
-func TestSkillsPrompt_SkippedForNativeProvider(t *testing.T) {
-	writeSkill(t)
-	h := &Handler{Provider: &sessionProvider{}}
-
-	assert.Empty(t, h.skillsPrompt())
 }

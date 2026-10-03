@@ -2,6 +2,7 @@ package config
 
 import (
 	"testing"
+	"time"
 
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
@@ -277,4 +278,18 @@ func TestInit_PartialRequired(t *testing.T) {
 	err := Init()
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "data_dir")
+}
+
+func TestLocation_Configured(t *testing.T) {
+	viper.Set("timezone", "Europe/Moscow")
+	defer viper.Reset()
+
+	assert.Equal(t, "Europe/Moscow", Location().String())
+}
+
+func TestLocation_InvalidFallsBackToLocal(t *testing.T) {
+	viper.Set("timezone", "Not/AZone")
+	defer viper.Reset()
+
+	assert.Equal(t, time.Local, Location())
 }

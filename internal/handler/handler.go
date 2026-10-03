@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
 	"slices"
 	"time"
 
@@ -13,19 +12,15 @@ import (
 	"github.com/go-telegram/bot/models"
 
 	"github.com/nickalie/nclaw/internal/cli"
-	"github.com/nickalie/nclaw/internal/cli/claude"
 	"github.com/nickalie/nclaw/internal/config"
+	"github.com/nickalie/nclaw/internal/invoker"
 	"github.com/nickalie/nclaw/internal/pipeline"
-	"github.com/nickalie/nclaw/internal/scheduler"
-	"github.com/nickalie/nclaw/internal/telegram"
 )
 
 // Handler processes incoming Telegram messages.
 type Handler struct {
-	Provider   cli.Provider
-	Scheduler  *scheduler.Scheduler
-	Pipeline   *pipeline.Pipeline
-	ChatLocker *telegram.ChatLocker
+	Invoker  *invoker.Invoker
+	Pipeline *pipeline.Pipeline
 }
 
 // Default handles incoming messages by forwarding them to Claude Code.
@@ -55,7 +50,7 @@ func (h *Handler) processMessage(ctx context.Context, b *bot.Bot, msg *models.Me
 
 	chatID := msg.Chat.ID
 	threadID := msg.MessageThreadID
-	dir := telegram.ChatDir(config.DataDir(), chatID, threadID)
+	dir := h.Invoker.ChatDir(chatID, threadID)
 	ensureDir(dir)
 
 	typingCtx, stopTyping := context.WithCancel(ctx)
@@ -66,15 +61,26 @@ func (h *Handler) processMessage(ctx context.Context, b *bot.Bot, msg *models.Me
 	prompt := buildPrompt(ctx, b, text, att, dir)
 	log.Printf("handler: received message from chat=%d thread=%d text_len=%d hasFile=%v", chatID, threadID, len(text), att != nil)
 
-	unlock := h.ChatLocker.Lock(chatID, threadID)
-	result, streamed, cliErr := h.callCLI(ctx, dir, prompt, chatID, threadID)
-	unlock()
+	var stream *pipeline.StreamState
+	out := h.Invoker.Run(ctx, invoker.Request{
+		ChatID:   chatID,
+		ThreadID: threadID,
+		Prompt:   prompt,
+		Configure: func(c cli.Client) {
+			stream = h.Pipeline.AttachStream(ctx, c, chatID, threadID)
+		},
+	})
 	stopTyping()
 
-	if result == nil {
-		result = &cli.Result{}
+	h.Pipeline.Process(ctx, withErrorText(out.Result, out.Err), out.Err, chatID, threadID, out.Dir, stream.Streamed())
+}
+
+func withErrorText(result *cli.Result, err error) *cli.Result {
+	if err == nil || result.Text != "" {
+		return result
 	}
-	h.Pipeline.Process(ctx, result, cliErr, chatID, threadID, dir, streamed)
+	text := "error: " + err.Error()
+	return &cli.Result{Text: text, FullText: text}
 }
 
 // resolveContent extracts text and attachment from a message, falling back to reply attachment.
@@ -136,73 +142,6 @@ func buildPrompt(ctx context.Context, b *bot.Bot, text string, att *attachment, 
 	}
 
 	return prompt
-}
-
-func (h *Handler) callCLI(
-	ctx context.Context, dir, prompt string, chatID int64, threadID int,
-) (*cli.Result, bool, error) {
-	taskPrompt := h.Scheduler.FormatTaskList(chatID, threadID)
-	systemPrompt := telegram.Prompt + "\n\n" + taskPrompt
-
-	if skills := h.skillsPrompt(); skills != "" {
-		systemPrompt += "\n\n" + skills
-	}
-
-	if err := h.Provider.PreInvoke(); err != nil {
-		log.Printf("handler: pre-invoke warning: %v", err)
-	}
-
-	h.maybeResetSession(dir)
-
-	client := h.Provider.NewClient().Dir(dir).SkipPermissions().AppendSystemPrompt(systemPrompt)
-	stream := h.Pipeline.AttachStream(ctx, client, chatID, threadID)
-
-	log.Printf("handler: calling %s Continue in dir=%s", h.Provider.Name(), dir)
-	result, err := client.Continue(prompt)
-
-	if err != nil {
-		log.Printf("handler: %s error: %v", h.Provider.Name(), err)
-		if result == nil || result.Text == "" {
-			result = &cli.Result{Text: "error: " + err.Error(), FullText: "error: " + err.Error()}
-		}
-	}
-
-	return result, stream.Streamed(), err
-}
-
-func (h *Handler) skillsPrompt() string {
-	if n, ok := h.Provider.(cli.NativeSkillsProvider); ok && n.NativeSkills() {
-		return ""
-	}
-	dir, err := claude.ConfigDir()
-	if err != nil {
-		return ""
-	}
-	return loadSkillsPrompt(filepath.Join(dir, "skills"))
-}
-
-func (h *Handler) maybeResetSession(dir string) {
-	store, ok := h.Provider.(cli.SessionStore)
-	if !ok {
-		return
-	}
-
-	maxBytes := config.MaxSessionBytes()
-	if maxBytes <= 0 {
-		return
-	}
-
-	size, found := store.SessionSize(dir)
-	if !found || size < maxBytes {
-		return
-	}
-
-	if err := store.ArchiveSession(dir); err != nil {
-		log.Printf("handler: failed to reset oversized session in dir=%s: %v", dir, err)
-		return
-	}
-
-	log.Printf("handler: reset session in dir=%s (was %d bytes, threshold %d bytes)", dir, size, maxBytes)
 }
 
 func sendTyping(ctx context.Context, b *bot.Bot, chatID int64, threadID int) {
