@@ -58,3 +58,9 @@ type SessionStore interface {
 	SessionSize(dir string) (int64, bool)
 	ArchiveSession(dir string) error
 }
+
+// EphemeralClient is implemented by clients that can run without persisting the
+// session, so one-off runs leave no conversation behind.
+type EphemeralClient interface {
+	Ephemeral() Client
+}

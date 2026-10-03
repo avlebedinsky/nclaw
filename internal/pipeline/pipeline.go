@@ -29,6 +29,7 @@ type Pipeline struct {
 	send               SendFunc
 	webhooksConfigured bool
 	streamMessages     bool
+	dataDir            string
 }
 
 // New creates a Pipeline. Nil executors are silently filtered out.
@@ -57,6 +58,19 @@ func New(
 // (false, default).
 func (p *Pipeline) SetStreamMessages(enabled bool) {
 	p.streamMessages = enabled
+}
+
+// SetDataDir sets the base data directory; files sent from a run must lie under
+// the chat's directory within it. Without it, the run's own directory is the limit.
+func (p *Pipeline) SetDataDir(dir string) {
+	p.dataDir = dir
+}
+
+func (p *Pipeline) chatRoot(chatID int64, threadID int, dir string) string {
+	if p.dataDir == "" {
+		return dir
+	}
+	return telegram.ChatDir(p.dataDir, chatID, threadID)
 }
 
 // StreamState tracks a live-streaming session created by AttachStream. It records
@@ -144,7 +158,7 @@ func (p *Pipeline) executeBlocks(
 				statusMsgs = append(statusMsgs, msg)
 			}
 		}
-		sendfile.ExecuteBlocks(ctx, p.senders, result.FullText, chatID, threadID, dir)
+		sendfile.ExecuteBlocks(ctx, p.senders, result.FullText, chatID, threadID, dir, p.chatRoot(chatID, threadID, dir))
 	}
 
 	if !p.webhooksConfigured && blocks.Webhook.MatchString(result.Text) {

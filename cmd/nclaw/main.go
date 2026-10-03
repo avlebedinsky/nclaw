@@ -78,10 +78,9 @@ func main() {
 }
 
 func setupBot(database *gorm.DB, provider cli.Provider) (*bot.Bot, *scheduler.Scheduler, *webhook.Manager, *webhook.Server) {
-	chatLocker := telegram.NewChatLocker()
-	var sched *scheduler.Scheduler
-	inv := invoker.New(provider, chatLocker, invokerOptions(func(chatID int64, threadID int) string {
-		return sched.FormatTaskList(chatID, threadID)
+	loc := config.Location()
+	inv := invoker.New(provider, telegram.NewChatLocker(), invokerOptions(loc, func(chatID int64, threadID int) string {
+		return scheduler.FormatTaskList(database, loc, chatID, threadID)
 	}))
 	h := &handler.Handler{Invoker: inv}
 
@@ -97,7 +96,7 @@ func setupBot(database *gorm.DB, provider cli.Provider) (*bot.Bot, *scheduler.Sc
 		Doc:   newSendDocFunc(b),
 		Audio: newSendAudioFunc(b),
 	}
-	sched, err = scheduler.New(database, provider, config.Timezone(), config.DataDir(), chatLocker)
+	sched, err := scheduler.New(database, inv, loc)
 	if err != nil {
 		log.Fatal("scheduler: ", err)
 	}
@@ -121,11 +120,11 @@ func setupBot(database *gorm.DB, provider cli.Provider) (*bot.Bot, *scheduler.Sc
 	return b, sched, webhookMgr, webhookSrv
 }
 
-func invokerOptions(taskList invoker.TaskListFunc) invoker.Options {
+func invokerOptions(loc *time.Location, taskList invoker.TaskListFunc) invoker.Options {
 	opts := invoker.Options{
 		DataDir:         config.DataDir(),
 		MaxSessionBytes: config.MaxSessionBytes(),
-		Location:        config.Location(),
+		Location:        loc,
 		TaskList:        taskList,
 	}
 	if dir, err := claude.ConfigDir(); err == nil {
@@ -145,6 +144,7 @@ func buildPipeline(
 	fileSenders.MediaGroup = newSendMediaGroupFunc(b)
 	p := pipeline.New(newPipelineSendFunc(b), fileSenders, webhookMgr != nil, executors...)
 	p.SetStreamMessages(config.StreamMessages())
+	p.SetDataDir(config.DataDir())
 	return p
 }
 

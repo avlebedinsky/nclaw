@@ -527,3 +527,10 @@ func TestOnMessage_NotSet_NoStreaming(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "hi", result.Text)
 }
+
+func TestEphemeral_AddsNoSessionPersistence(t *testing.T) {
+	c := New()
+	assert.Same(t, c, c.Ephemeral())
+	c.prepare("-p")
+	assert.Contains(t, c.bin.Args(), "--no-session-persistence")
+}

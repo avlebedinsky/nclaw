@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -205,4 +206,57 @@ func TestLoadSkillsPrompt(t *testing.T) {
 
 	assert.Equal(t, "# Available Skills\n\ndemo skill body", prompt)
 	assert.Empty(t, loadSkillsPrompt(filepath.Join(dir, "missing")))
+}
+
+type ephemeralClient struct {
+	fakeClient
+	ephemeral bool
+}
+
+func (c *ephemeralClient) Dir(dir string) cli.Client { c.fakeClient.Dir(dir); return c }
+func (c *ephemeralClient) SkipPermissions() cli.Client {
+	c.fakeClient.SkipPermissions()
+	return c
+}
+func (c *ephemeralClient) AppendSystemPrompt(p string) cli.Client {
+	c.fakeClient.AppendSystemPrompt(p)
+	return c
+}
+func (c *ephemeralClient) Ephemeral() cli.Client {
+	c.ephemeral = true
+	return c
+}
+
+type ephemeralProvider struct {
+	nativeProvider
+	client *ephemeralClient
+}
+
+func (p *ephemeralProvider) NewClient() cli.Client { return p.client }
+
+func TestRun_IsolatedAsksInSubdirWithoutPersistence(t *testing.T) {
+	client := &ephemeralClient{fakeClient: fakeClient{result: &cli.Result{Text: "ok"}}}
+	p := &ephemeralProvider{client: client, nativeProvider: nativeProvider{size: 1 << 30}}
+	inv := newTestInvoker(t, p, Options{MaxSessionBytes: 100})
+
+	out := inv.Run(context.Background(), Request{ChatID: 100, Prompt: "reminder", Mode: Isolated})
+
+	assert.Equal(t, filepath.Join(inv.ChatDir(100, 0), IsolatedDirName), out.Dir)
+	assert.Equal(t, inv.ChatDir(100, 0), out.ChatDir)
+	assert.DirExists(t, out.Dir)
+	assert.Equal(t, "ask", client.mode)
+	assert.Equal(t, out.Dir, client.dir)
+	assert.True(t, client.ephemeral)
+	assert.Contains(t, client.query, "[Isolated run in "+out.Dir)
+	assert.True(t, strings.HasSuffix(client.query, "reminder"))
+	assert.Empty(t, p.archived, "isolated runs must not reset the chat session")
+}
+
+func TestRun_IsolatedWithoutEphemeralSupportStillAsks(t *testing.T) {
+	client := &fakeClient{result: &cli.Result{}}
+	inv := newTestInvoker(t, &fakeProvider{client: client}, Options{})
+
+	inv.Run(context.Background(), Request{ChatID: 1, Prompt: "x", Mode: Isolated})
+
+	assert.Equal(t, "ask", client.mode)
 }

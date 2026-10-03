@@ -13,10 +13,11 @@ import (
 	"github.com/nickalie/nclaw/internal/cli/streamjson"
 )
 
-// Compile-time checks: *Claude implements cli.Client and cli.StreamingClient.
+// Compile-time checks: *Claude implements cli.Client and its optional interfaces.
 var (
 	_ cli.Client          = (*Claude)(nil)
 	_ cli.StreamingClient = (*Claude)(nil)
+	_ cli.EphemeralClient = (*Claude)(nil)
 )
 
 // outputFormat represents the output format for the CLI.
@@ -171,6 +172,12 @@ func (c *Claude) SkipPermissions() cli.Client {
 // streams from the CLI, enabling real-time delivery. Implements cli.StreamingClient.
 func (c *Claude) OnMessage(handler cli.MessageHandler) cli.Client {
 	c.onMessage = handler
+	return c
+}
+
+// Ephemeral disables session persistence for this run. Implements cli.EphemeralClient.
+func (c *Claude) Ephemeral() cli.Client {
+	c.noPersistence = true
 	return c
 }
 

@@ -12,6 +12,7 @@ import (
 
 	"github.com/nickalie/nclaw/internal/blocks"
 	"github.com/nickalie/nclaw/internal/cli"
+	"github.com/nickalie/nclaw/internal/invoker"
 	"github.com/nickalie/nclaw/internal/model"
 	"github.com/nickalie/nclaw/internal/telegram"
 )
@@ -34,7 +35,7 @@ func setupTestScheduler(t *testing.T) *Scheduler {
 	require.NoError(t, err)
 	require.NoError(t, database.AutoMigrate(&model.ScheduledTask{}, &model.TaskRunLog{}))
 
-	sched, err := New(database, &mockProvider{}, "UTC", t.TempDir(), telegram.NewChatLocker())
+	sched, err := New(database, invoker.New(&mockProvider{}, telegram.NewChatLocker(), invoker.Options{DataDir: t.TempDir()}), time.UTC)
 	require.NoError(t, err)
 	return sched
 }
@@ -174,7 +175,7 @@ func TestTruncate(t *testing.T) {
 
 func TestFormatTaskList_Empty(t *testing.T) {
 	s := setupTestScheduler(t)
-	result := s.FormatTaskList(100, 0)
+	result := FormatTaskList(s.db, time.UTC, 100, 0)
 	assert.Equal(t, "Current scheduled tasks: none", result)
 }
 
@@ -196,7 +197,7 @@ func TestFormatTaskList_WithTasks(t *testing.T) {
 	}
 	require.NoError(t, s.db.Create(task).Error)
 
-	result := s.FormatTaskList(100, 0)
+	result := FormatTaskList(s.db, time.UTC, 100, 0)
 	assert.Contains(t, result, "Current scheduled tasks:")
 	assert.Contains(t, result, "task-123")
 	assert.Contains(t, result, "check weather")
@@ -221,7 +222,7 @@ func TestFormatTaskList_DifferentChat(t *testing.T) {
 	require.NoError(t, s.db.Create(task).Error)
 
 	// Should not appear for chat 100
-	result := s.FormatTaskList(100, 0)
+	result := FormatTaskList(s.db, time.UTC, 100, 0)
 	assert.Equal(t, "Current scheduled tasks: none", result)
 }
 

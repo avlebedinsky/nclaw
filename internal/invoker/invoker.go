@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -20,7 +21,12 @@ type Mode int
 // Run modes.
 const (
 	Continue Mode = iota
+	Isolated
 )
+
+// IsolatedDirName is the chat subdirectory where isolated runs execute, so their
+// sessions never become the chat's most recent conversation.
+const IsolatedDirName = ".isolated"
 
 // TaskListFunc returns the scheduled-task section of the system prompt for a chat/thread.
 type TaskListFunc func(chatID int64, threadID int) string
@@ -82,8 +88,7 @@ func (i *Invoker) ChatDir(chatID int64, threadID int) string {
 
 // Run executes one CLI invocation for the request, holding the chat's lock for its duration.
 func (i *Invoker) Run(_ context.Context, req Request) Outcome {
-	chatDir := i.ChatDir(req.ChatID, req.ThreadID)
-	out := Outcome{Dir: chatDir, ChatDir: chatDir}
+	out := i.dirs(req)
 	if err := os.MkdirAll(out.Dir, 0o755); err != nil {
 		out.Result, out.Err = &cli.Result{}, fmt.Errorf("invoker: mkdir %s: %w", out.Dir, err)
 		return out
@@ -95,7 +100,9 @@ func (i *Invoker) Run(_ context.Context, req Request) Outcome {
 	if err := i.provider.PreInvoke(); err != nil {
 		log.Printf("invoker: pre-invoke warning: %v", err)
 	}
-	i.maybeResetSession(out.Dir)
+	if req.Mode == Continue {
+		i.maybeResetSession(out.Dir)
+	}
 
 	client := i.provider.NewClient().Dir(out.Dir).SkipPermissions().
 		AppendSystemPrompt(i.systemPrompt(req.ChatID, req.ThreadID))
@@ -104,7 +111,7 @@ func (i *Invoker) Run(_ context.Context, req Request) Outcome {
 	}
 
 	log.Printf("invoker: running %s in dir=%s", i.provider.Name(), out.Dir)
-	out.Result, out.Err = client.Continue(i.timeHeader() + req.Prompt)
+	out.Result, out.Err = i.execute(client, req, out)
 	if out.Result == nil {
 		out.Result = &cli.Result{}
 	}
@@ -112,6 +119,25 @@ func (i *Invoker) Run(_ context.Context, req Request) Outcome {
 		log.Printf("invoker: %s error in dir=%s: %v", i.provider.Name(), out.Dir, out.Err)
 	}
 	return out
+}
+
+func (i *Invoker) dirs(req Request) Outcome {
+	chatDir := i.ChatDir(req.ChatID, req.ThreadID)
+	if req.Mode == Isolated {
+		return Outcome{Dir: filepath.Join(chatDir, IsolatedDirName), ChatDir: chatDir}
+	}
+	return Outcome{Dir: chatDir, ChatDir: chatDir}
+}
+
+func (i *Invoker) execute(client cli.Client, req Request, out Outcome) (*cli.Result, error) {
+	if req.Mode != Isolated {
+		return client.Continue(i.timeHeader() + req.Prompt)
+	}
+	if ec, ok := client.(cli.EphemeralClient); ok {
+		client = ec.Ephemeral()
+	}
+	note := fmt.Sprintf("[Isolated run in %s; the chat's files are in %s]\n\n", out.Dir, out.ChatDir)
+	return client.Ask(i.timeHeader() + note + req.Prompt)
 }
 
 func (i *Invoker) systemPrompt(chatID int64, threadID int) string {

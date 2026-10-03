@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -16,52 +15,39 @@ import (
 
 	"github.com/nickalie/nclaw/internal/cli"
 	"github.com/nickalie/nclaw/internal/db"
+	"github.com/nickalie/nclaw/internal/invoker"
 	"github.com/nickalie/nclaw/internal/model"
 	"github.com/nickalie/nclaw/internal/pipeline"
-	"github.com/nickalie/nclaw/internal/telegram"
 )
 
 // Scheduler manages scheduled tasks using gocron and SQLite persistence.
 type Scheduler struct {
-	cron       gocron.Scheduler
-	db         *gorm.DB
-	provider   cli.Provider
-	pipeline   *pipeline.Pipeline
-	dataDir    string
-	loc        *time.Location
-	chatLocker *telegram.ChatLocker
-	jobs       map[string]uuid.UUID // taskID -> gocron job UUID
-	running    map[string]bool      // tasks currently executing
-	canceled   map[string]bool      // tasks canceled during execution
-	mu         sync.Mutex
+	cron     gocron.Scheduler
+	db       *gorm.DB
+	invoker  *invoker.Invoker
+	pipeline *pipeline.Pipeline
+	loc      *time.Location
+	jobs     map[string]uuid.UUID // taskID -> gocron job UUID
+	running  map[string]bool      // tasks currently executing
+	canceled map[string]bool      // tasks canceled during execution
+	mu       sync.Mutex
 }
 
-// New creates a new Scheduler.
-func New(
-	database *gorm.DB, provider cli.Provider,
-	timezone, dataDir string, chatLocker *telegram.ChatLocker,
-) (*Scheduler, error) {
-	loc, err := time.LoadLocation(timezone)
-	if err != nil {
-		log.Printf("scheduler: invalid timezone %q, falling back to local: %v", timezone, err)
-		loc = time.Local
-	}
-
+// New creates a new Scheduler that runs tasks through inv in the given timezone.
+func New(database *gorm.DB, inv *invoker.Invoker, loc *time.Location) (*Scheduler, error) {
 	cron, err := gocron.NewScheduler(gocron.WithLocation(loc))
 	if err != nil {
 		return nil, fmt.Errorf("scheduler: create: %w", err)
 	}
 
 	return &Scheduler{
-		cron:       cron,
-		db:         database,
-		provider:   provider,
-		dataDir:    dataDir,
-		loc:        loc,
-		chatLocker: chatLocker,
-		jobs:       make(map[string]uuid.UUID),
-		running:    make(map[string]bool),
-		canceled:   make(map[string]bool),
+		cron:     cron,
+		db:       database,
+		invoker:  inv,
+		loc:      loc,
+		jobs:     make(map[string]uuid.UUID),
+		running:  make(map[string]bool),
+		canceled: make(map[string]bool),
 	}, nil
 }
 
@@ -262,19 +248,9 @@ func (s *Scheduler) executeTask(taskID string) {
 		taskID, task.ScheduleType, task.ScheduleValue, truncate(task.Prompt, 60))
 
 	start := time.Now()
-
-	dir := telegram.ChatDir(s.dataDir, task.ChatID, task.ThreadID)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		log.Printf("scheduler: mkdir %s: %v", dir, err)
-	}
-
-	prompt := "[SCHEDULED TASK - Running automatically, not in response to a user message]\n\n" + task.Prompt
-	result, runErr := s.invokeCLI(task, dir, prompt)
+	out := s.invokeCLI(task)
+	result, runErr := out.Result, out.Err
 	duration := time.Since(start)
-
-	if result == nil {
-		result = &cli.Result{}
-	}
 
 	if runErr != nil {
 		log.Printf("scheduler: task %s failed after %s: %v", taskID, duration, runErr)
@@ -282,11 +258,12 @@ func (s *Scheduler) executeTask(taskID string) {
 		log.Printf("scheduler: task %s completed in %s, reply_len=%d", taskID, duration, len(result.Text))
 	}
 
-	s.finalizeAndSend(task, result, runErr, duration)
+	s.finalizeAndSend(task, out, duration)
 }
 
 // finalizeAndSend records run results and sends the reply, unless the task was canceled.
-func (s *Scheduler) finalizeAndSend(task *model.ScheduledTask, result *cli.Result, runErr error, duration time.Duration) {
+func (s *Scheduler) finalizeAndSend(task *model.ScheduledTask, out invoker.Outcome, duration time.Duration) {
+	result, runErr := out.Result, out.Err
 	// Atomically verify task still exists and record results.
 	err := s.recordResults(task, result.Text, runErr, duration)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -314,7 +291,7 @@ func (s *Scheduler) finalizeAndSend(task *model.ScheduledTask, result *cli.Resul
 		return
 	}
 
-	s.sendResult(task, result, runErr)
+	s.sendResult(task, result, runErr, out.Dir)
 }
 
 // clearRunState removes the task from both the running and canceled sets.
@@ -325,20 +302,19 @@ func (s *Scheduler) clearRunState(taskID string) {
 	s.mu.Unlock()
 }
 
-func (s *Scheduler) invokeCLI(task *model.ScheduledTask, dir, prompt string) (*cli.Result, error) {
-	if err := s.provider.PreInvoke(); err != nil {
-		log.Printf("scheduler: pre-invoke warning: %v", err)
+func (s *Scheduler) invokeCLI(task *model.ScheduledTask) invoker.Outcome {
+	mode := invoker.Continue
+	if task.ContextMode == model.ContextIsolated {
+		mode = invoker.Isolated
 	}
 
-	unlock := s.chatLocker.Lock(task.ChatID, task.ThreadID)
-	defer unlock()
-
-	log.Printf("scheduler: invoking %s for task %s in dir=%s context=%s", s.provider.Name(), task.ID, dir, task.ContextMode)
-	c := s.provider.NewClient().Dir(dir).SkipPermissions()
-	if task.ContextMode == model.ContextGroup {
-		return c.Continue(prompt)
-	}
-	return c.Ask(prompt)
+	log.Printf("scheduler: invoking %s for task %s context=%s", s.invoker.ProviderName(), task.ID, task.ContextMode)
+	return s.invoker.Run(context.Background(), invoker.Request{
+		ChatID:   task.ChatID,
+		ThreadID: task.ThreadID,
+		Prompt:   "[SCHEDULED TASK - Running automatically, not in response to a user message]\n\n" + task.Prompt,
+		Mode:     mode,
+	})
 }
 
 // recordResults atomically verifies the task still exists and records the run outcome.
@@ -404,7 +380,7 @@ func (s *Scheduler) resolveNextRun(task *model.ScheduledTask) *time.Time {
 	return s.getNextRun(jobID)
 }
 
-func (s *Scheduler) sendResult(task *model.ScheduledTask, result *cli.Result, runErr error) {
+func (s *Scheduler) sendResult(task *model.ScheduledTask, result *cli.Result, runErr error, dir string) {
 	if s.pipeline == nil {
 		log.Printf("scheduler: pipeline not ready, dropping result for task %s", task.ID)
 		return
@@ -420,7 +396,6 @@ func (s *Scheduler) sendResult(task *model.ScheduledTask, result *cli.Result, ru
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	dir := telegram.ChatDir(s.dataDir, task.ChatID, task.ThreadID)
 	s.pipeline.Process(ctx, result, runErr, task.ChatID, task.ThreadID, dir, false)
 }
 
@@ -436,9 +411,10 @@ func (s *Scheduler) getNextRun(jobID uuid.UUID) *time.Time {
 	return nil
 }
 
-// FormatTaskList returns a system prompt section listing current tasks for a chat/thread.
-func (s *Scheduler) FormatTaskList(chatID int64, threadID int) string {
-	tasks, err := db.ListTasksByChat(s.db, chatID, threadID)
+// FormatTaskList returns a system prompt section listing the tasks of a chat/thread,
+// with next run times shown in loc.
+func FormatTaskList(database *gorm.DB, loc *time.Location, chatID int64, threadID int) string {
+	tasks, err := db.ListTasksByChat(database, chatID, threadID)
 	if err != nil {
 		log.Printf("scheduler: list tasks: %v", err)
 		return "Current scheduled tasks: none"
@@ -452,7 +428,7 @@ func (s *Scheduler) FormatTaskList(chatID int64, threadID int) string {
 	for i := range tasks {
 		next := "N/A"
 		if tasks[i].NextRun != nil {
-			next = tasks[i].NextRun.Format("2006-01-02 15:04:05")
+			next = tasks[i].NextRun.In(loc).Format("2006-01-02 15:04:05")
 		}
 		prompt := truncate(tasks[i].Prompt, 80)
 		fmt.Fprintf(&b, "- [%s] %s (%s: %s) status=%s next=%s\n",
