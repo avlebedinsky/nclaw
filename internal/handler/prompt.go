@@ -18,6 +18,7 @@ const (
 // Inbound is a user message waiting in its chat's queue.
 type Inbound struct {
 	msgID      int
+	sender     string
 	text       string
 	att        *attachment
 	mediaGroup string
@@ -28,7 +29,9 @@ func newInbound(msg *models.Message) (Inbound, bool) {
 	if text == "" && att == nil {
 		return Inbound{}, false
 	}
-	return Inbound{msgID: msg.ID, text: withReplyContext(msg, text), att: att, mediaGroup: msg.MediaGroupID}, true
+	return Inbound{
+		msgID: msg.ID, sender: senderName(msg), text: withReplyContext(msg, text), att: att, mediaGroup: msg.MediaGroupID,
+	}, true
 }
 
 func settleFor(msg *models.Message) time.Duration {
@@ -45,7 +48,7 @@ func (h *Handler) composePrompt(ctx context.Context, dir string, batch []Inbound
 	}
 
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "The user sent %d messages in a row. Treat them as one request and answer them together.\n", len(parts))
+	fmt.Fprintf(&sb, "%d messages arrived in a row. Treat them as one request and answer them together.\n", len(parts))
 	for i, part := range parts {
 		fmt.Fprintf(&sb, "\n--- Message %d ---\n%s\n", i+1, h.partPrompt(ctx, dir, part))
 	}
@@ -66,6 +69,14 @@ func groupAlbums(batch []Inbound) [][]Inbound {
 }
 
 func (h *Handler) partPrompt(ctx context.Context, dir string, part []Inbound) string {
+	prompt := h.contentPrompt(ctx, dir, part)
+	if sender := part[0].sender; sender != "" {
+		return "[From: " + sender + "]\n" + prompt
+	}
+	return prompt
+}
+
+func (h *Handler) contentPrompt(ctx context.Context, dir string, part []Inbound) string {
 	if len(part) == 1 {
 		return h.buildPrompt(ctx, part[0].text, part[0].att, dir)
 	}

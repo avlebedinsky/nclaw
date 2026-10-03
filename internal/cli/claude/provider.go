@@ -15,6 +15,7 @@ var (
 	_ cli.SessionStore         = (*Provider)(nil)
 	_ cli.AuthProvider         = (*Provider)(nil)
 	_ cli.LoginProvider        = (*Provider)(nil)
+	_ cli.MemoryFileProvider   = (*Provider)(nil)
 )
 
 // NewProvider creates a new Claude CLI provider.
@@ -52,6 +53,11 @@ func (p *Provider) newClaude() *Claude {
 		c.ExecPath(p.execPath)
 	}
 	return c
+}
+
+// MemoryFile names the instructions file Claude Code loads from the working directory and its parents.
+func (p *Provider) MemoryFile() string {
+	return "CLAUDE.md"
 }
 
 // NativeSkills reports that the CLI loads skills from its own skills directory.

@@ -40,7 +40,7 @@ There are many AI assistants already — [OpenClaw](https://openclaw.ai/), [Nano
 
 **Lightweight.** A single Go binary. Idles at ~10 MB of RAM. No runtime interpreter, no package manager overhead, no garbage collection pauses that matter.
 
-**Telegram topics as projects.** NClaw treats each Telegram topic (thread) as a separate session with its own working directory. One group chat with topics becomes a multi-project workspace — each topic gets isolated context, history, and files.
+**Telegram topics as projects.** NClaw treats each Telegram topic (thread) as a separate session with its own working directory. One group chat with topics becomes a multi-project workspace — each topic gets isolated context, history, and files. The agent is told which group and topic it is working in (or whom it talks to in a private chat), and in groups every message carries its sender's name.
 
 ## How It Works
 
@@ -57,7 +57,7 @@ The recommended way to run NClaw is inside Docker — the container serves as a 
 ## Features
 
 - **Session persistence** — Each chat/topic maintains its own session. Pick up where you left off.
-- **Telegram topics** — Each topic in a group chat is a separate project with isolated context and files.
+- **Telegram topics** — Each topic in a group chat is a separate project with isolated context and files. With Claude-based backends the topics also share a short `CLAUDE.md` in the chat's directory for facts that concern all of them, while each keeps its own auto memory.
 - **File attachments** — Send photos, documents, audio, video to the assistant. Albums arrive as one request.
 - **Voice messages** — Voice notes and video notes are transcribed locally with whisper.cpp and handled like typed messages.
 - **Ordered message queue** — Messages sent while the assistant is busy are answered in order, in a single combined run.

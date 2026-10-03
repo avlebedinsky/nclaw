@@ -201,7 +201,7 @@ func (i *Invoker) continueOrStart(client cli.Client, dir, prompt string) (*cli.R
 }
 
 func (i *Invoker) systemPrompt(chatID int64, threadID int) string {
-	parts := []string{telegram.Prompt, i.timezoneLine()}
+	parts := []string{telegram.Prompt, i.chatContext(chatID, threadID), i.timezoneLine()}
 	if i.opts.TaskList != nil {
 		parts = append(parts, i.opts.TaskList(chatID, threadID))
 	}
@@ -209,6 +209,44 @@ func (i *Invoker) systemPrompt(chatID int64, threadID int) string {
 		parts = append(parts, skills)
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+func (i *Invoker) chatContext(chatID int64, threadID int) string {
+	chatDir := i.ChatDir(chatID, 0)
+	lines := []string{chatLine(chatID, telegram.ChatName(chatDir))}
+	if topic := telegram.TopicName(i.ChatDir(chatID, threadID)); threadID != 0 && topic != "" {
+		lines = append(lines, "This conversation is the topic «"+topic+"» of that chat; every topic is a separate conversation.")
+	}
+	if rule := i.sharedMemoryRule(chatID, threadID, chatDir); rule != "" {
+		lines = append(lines, rule)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func chatLine(chatID int64, name string) string {
+	private := telegram.IsPrivateChat(chatID)
+	switch {
+	case private && name != "":
+		return "This is a private Telegram chat with " + name + "."
+	case private:
+		return "This is a private Telegram chat."
+	case name != "":
+		return "This is the Telegram group «" + name + "». Messages from people start with [From: name]."
+	default:
+		return "This is a Telegram group chat. Messages from people start with [From: name]."
+	}
+}
+
+func (i *Invoker) sharedMemoryRule(chatID int64, threadID int, chatDir string) string {
+	mp, ok := i.provider.(cli.MemoryFileProvider)
+	singleConversation := telegram.IsPrivateChat(chatID) && threadID == 0
+	if !ok || singleConversation {
+		return ""
+	}
+	return "Your auto memory belongs to this conversation only. Facts that every conversation in this chat should know " +
+		"(who the people are, what each topic is for, shared conventions) go into " + filepath.Join(chatDir, mp.MemoryFile()) +
+		", which all of them load: keep it short, one fact per line, and remove what is no longer true. " +
+		"Never save passwords, tokens or card numbers in any memory."
 }
 
 func (i *Invoker) timezoneLine() string {

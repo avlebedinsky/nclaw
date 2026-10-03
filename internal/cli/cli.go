@@ -68,6 +68,12 @@ type SessionStore interface {
 	ArchiveSession(dir string) error
 }
 
+// MemoryFileProvider is implemented by providers whose CLI loads an instructions file with
+// this name from the working directory and from every directory above it.
+type MemoryFileProvider interface {
+	MemoryFile() string
+}
+
 // AuthProvider is implemented by providers whose stored sign-in expires on a known date.
 type AuthProvider interface {
 	// AuthExpiry returns when the stored sign-in stops working; ok is false when it is unknown.
