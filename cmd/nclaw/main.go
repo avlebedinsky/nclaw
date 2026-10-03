@@ -27,6 +27,7 @@ import (
 	"github.com/nickalie/nclaw/internal/handler"
 	"github.com/nickalie/nclaw/internal/invoker"
 	"github.com/nickalie/nclaw/internal/pipeline"
+	"github.com/nickalie/nclaw/internal/progress"
 	"github.com/nickalie/nclaw/internal/scheduler"
 	"github.com/nickalie/nclaw/internal/sendfile"
 	"github.com/nickalie/nclaw/internal/version"
@@ -97,6 +98,9 @@ func setupBot(database *gorm.DB, provider cli.Provider) (*bot.Bot, *scheduler.Sc
 	}
 	h.Bot = b
 	h.Send = newPipelineSendFunc(b)
+	if config.Progress() {
+		h.Progress = progress.NewBotAPI(b)
+	}
 	registerCommands(b, h)
 
 	fileSenders := sendfile.Senders{

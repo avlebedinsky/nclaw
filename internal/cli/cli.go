@@ -73,3 +73,17 @@ type SessionStore interface {
 type EphemeralClient interface {
 	Ephemeral() Client
 }
+
+// ToolEvent describes a tool call the agent has started.
+type ToolEvent struct {
+	Name   string
+	Detail string
+}
+
+// ToolHandler receives tool calls as they stream from the CLI.
+type ToolHandler func(ToolEvent)
+
+// ProgressClient is implemented by clients that report tool calls while running.
+type ProgressClient interface {
+	OnToolUse(handler ToolHandler) Client
+}

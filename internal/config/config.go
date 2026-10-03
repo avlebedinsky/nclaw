@@ -77,6 +77,15 @@ func StartupNotification() bool {
 	return viper.GetBool("startup_notification")
 }
 
+// Progress reports whether a status message tracking the agent's tool calls is shown
+// while a request runs (env: NCLAW_PROGRESS). Enabled by default.
+func Progress() bool {
+	if !viper.IsSet("progress") {
+		return true
+	}
+	return viper.GetBool("progress")
+}
+
 // StreamMessages reports whether every assistant message from the CLI's JSON
 // stream should be sent as a separate Telegram reply (env: NCLAW_STREAM_MESSAGES).
 // When disabled (default), only the final message is sent.

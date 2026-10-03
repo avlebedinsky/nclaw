@@ -11,10 +11,11 @@ import (
 	"github.com/nickalie/nclaw/internal/cli/streamjson"
 )
 
-// Compile-time checks: *Claudish implements cli.Client and cli.StreamingClient.
+// Compile-time checks: *Claudish implements cli.Client and its optional interfaces.
 var (
 	_ cli.Client          = (*Claudish)(nil)
 	_ cli.StreamingClient = (*Claudish)(nil)
+	_ cli.ProgressClient  = (*Claudish)(nil)
 )
 
 // Claudish wraps the claudish CLI binary, which proxies Claude Code to alternative model providers.
@@ -24,6 +25,7 @@ type Claudish struct {
 	dir             string
 	systemPrompt    string
 	onMessage       cli.MessageHandler
+	onTool          cli.ToolHandler
 	skipPermissions bool
 	model           string
 	modelOpus       string
@@ -72,6 +74,13 @@ func (c *Claudish) AppendSystemPrompt(prompt string) cli.Client {
 	return c
 }
 
+// OnToolUse registers a callback invoked for each tool call as it streams from the CLI.
+// Implements cli.ProgressClient.
+func (c *Claudish) OnToolUse(handler cli.ToolHandler) cli.Client {
+	c.onTool = handler
+	return c
+}
+
 // OnMessage registers a callback invoked for each assistant message as it
 // streams from the CLI, enabling real-time delivery. Implements cli.StreamingClient.
 func (c *Claudish) OnMessage(handler cli.MessageHandler) cli.Client {
@@ -110,13 +119,13 @@ func (c *Claudish) runAndParse(query string) (*cli.Result, error) {
 // assistant message is delivered live; otherwise output is captured and parsed
 // at the end.
 func (c *Claudish) run(query string) (*cli.Result, []byte, error) {
-	if c.onMessage == nil {
+	if c.onMessage == nil && c.onTool == nil {
 		err := c.bin.Run(c.runCtx(), query)
 		stdout := c.bin.StdOut()
 		return streamjson.ParseOutput(stdout), stdout, err
 	}
 
-	w := streamjson.NewStreamWriter(c.onMessage)
+	w := streamjson.NewStreamWriter(c.onMessage).WithToolHandler(c.onTool)
 	c.bin.SetStdOut(w)
 	err := c.bin.Run(c.runCtx(), query)
 	return w.Result(), w.Bytes(), err

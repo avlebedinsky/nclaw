@@ -1015,3 +1015,60 @@ func TestWithErrorText(t *testing.T) {
 	assert.Equal(t, "⏱ Stopped: the run took longer than 1h0m0s.", withErrorText(&cli.Result{}, timeout).Text)
 	assert.Equal(t, "half done\n\n⏱ Stopped: the run took longer than 1h0m0s.", withErrorText(&cli.Result{Text: "half done"}, timeout).Text)
 }
+
+type progressClient struct {
+	mockClient
+	onTool cli.ToolHandler
+}
+
+func (c *progressClient) Context(context.Context) cli.Client   { return c }
+func (c *progressClient) Dir(string) cli.Client                { return c }
+func (c *progressClient) SkipPermissions() cli.Client          { return c }
+func (c *progressClient) AppendSystemPrompt(string) cli.Client { return c }
+func (c *progressClient) OnToolUse(h cli.ToolHandler) cli.Client {
+	c.onTool = h
+	return c
+}
+func (c *progressClient) Continue(string) (*cli.Result, error) {
+	c.onTool(cli.ToolEvent{Name: "Bash", Detail: "make test"})
+	time.Sleep(50 * time.Millisecond)
+	return &cli.Result{Text: "tests pass", FullText: "tests pass"}, nil
+}
+
+type progressProvider struct {
+	mockProvider
+	client *progressClient
+}
+
+func (p *progressProvider) NewClient() cli.Client { return p.client }
+
+type progressAPI struct {
+	mu  sync.Mutex
+	ops []string
+}
+
+func (a *progressAPI) Send(_ context.Context, _ int64, _ int, text string) (int, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.ops = append(a.ops, "send:"+text[:strings.Index(text, "\n")])
+	return 9, nil
+}
+func (a *progressAPI) Edit(context.Context, int64, int, string) error { return nil }
+func (a *progressAPI) Delete(_ context.Context, _ int64, msgID int) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.ops = append(a.ops, fmt.Sprintf("delete:%d", msgID))
+	return nil
+}
+
+func TestRunBatch_ShowsAndRemovesProgress(t *testing.T) {
+	api := &progressAPI{}
+	sent := &safeSent{}
+	h := newTestHandler(t, &progressProvider{client: &progressClient{}}, sent.send)
+	h.Progress = api
+
+	h.RunBatch(context.Background(), testKey, []Inbound{{text: "run tests"}})
+
+	assert.Equal(t, []string{"send:🔧 Bash: make test", "delete:9"}, api.ops)
+	assert.Equal(t, []string{"tests pass"}, sent.all())
+}

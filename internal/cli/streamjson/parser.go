@@ -22,8 +22,10 @@ type assistantMessage struct {
 
 // contentBlock represents a single content block in an assistant message.
 type contentBlock struct {
-	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
+	Type  string          `json:"type"`
+	Text  string          `json:"text,omitempty"`
+	Name  string          `json:"name,omitempty"`
+	Input json.RawMessage `json:"input,omitempty"`
 }
 
 // ParseOutput parses stream-json (NDJSON) output and extracts all assistant
@@ -57,6 +59,7 @@ func assembleResult(allText []string, resultText string) *cli.Result {
 // cli.Result from the accumulated state, so each line is parsed exactly once.
 type StreamWriter struct {
 	onMessage  func(string)
+	onTool     cli.ToolHandler
 	pending    []byte
 	raw        bytes.Buffer
 	messages   []string
@@ -68,6 +71,12 @@ type StreamWriter struct {
 // accumulates output for a final Result.
 func NewStreamWriter(onMessage func(string)) *StreamWriter {
 	return &StreamWriter{onMessage: onMessage}
+}
+
+// WithToolHandler makes the writer report every tool call to h as it streams in.
+func (w *StreamWriter) WithToolHandler(h cli.ToolHandler) *StreamWriter {
+	w.onTool = h
+	return w
 }
 
 // Write captures raw bytes and processes complete NDJSON lines. It always reports
@@ -127,33 +136,48 @@ func (w *StreamWriter) handleLine(line []byte) {
 
 	switch event.Type {
 	case "assistant":
-		if text := extractAssistantText(event.Message); text != "" {
-			w.messages = append(w.messages, text)
-			if w.onMessage != nil {
-				w.onMessage(text)
-			}
-		}
+		w.handleAssistant(event.Message)
 	case "result":
 		w.resultText = event.Result
 	}
 }
 
-func extractAssistantText(msg json.RawMessage) string {
+func (w *StreamWriter) handleAssistant(raw json.RawMessage) {
+	text, tools := parseAssistant(raw)
+	if text != "" {
+		w.messages = append(w.messages, text)
+		if w.onMessage != nil {
+			w.onMessage(text)
+		}
+	}
+	if w.onTool == nil {
+		return
+	}
+	for _, ev := range tools {
+		w.onTool(ev)
+	}
+}
+
+func parseAssistant(msg json.RawMessage) (string, []cli.ToolEvent) {
 	if len(msg) == 0 {
-		return ""
+		return "", nil
 	}
 
 	var message assistantMessage
 	if err := json.Unmarshal(msg, &message); err != nil {
-		return ""
+		return "", nil
 	}
 
 	var parts []string
+	var tools []cli.ToolEvent
 	for _, block := range message.Content {
-		if block.Type == "text" && block.Text != "" {
+		switch {
+		case block.Type == "text" && block.Text != "":
 			parts = append(parts, block.Text)
+		case block.Type == "tool_use":
+			tools = append(tools, toolEvent(block.Name, block.Input))
 		}
 	}
 
-	return strings.Join(parts, "\n")
+	return strings.Join(parts, "\n"), tools
 }

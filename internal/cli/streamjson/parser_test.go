@@ -6,7 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nickalie/nclaw/internal/cli"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestParseOutput_MultiTurn(t *testing.T) {
@@ -102,14 +104,14 @@ func TestParseOutput_MalformedJSONSkipped(t *testing.T) {
 }
 
 func TestExtractAssistantText_EmptyMessage(t *testing.T) {
-	assert.Equal(t, "", extractAssistantText(nil))
-	assert.Equal(t, "", extractAssistantText(json.RawMessage("")))
-	assert.Equal(t, "", extractAssistantText(json.RawMessage("{}")))
+	assert.Equal(t, "", assistantText(nil))
+	assert.Equal(t, "", assistantText(json.RawMessage("")))
+	assert.Equal(t, "", assistantText(json.RawMessage("{}")))
 }
 
 func TestExtractAssistantText_TextContent(t *testing.T) {
 	msg := json.RawMessage(`{"content":[{"type":"text","text":"hello"}]}`)
-	assert.Equal(t, "hello", extractAssistantText(msg))
+	assert.Equal(t, "hello", assistantText(msg))
 }
 
 func TestStreamWriter_EmitsAssistantMessages(t *testing.T) {
@@ -229,4 +231,54 @@ func TestStreamWriter_LineOverOneMegabyteInChunks(t *testing.T) {
 	}
 
 	assert.Equal(t, "done", w.Result().Text)
+}
+
+func assistantText(m json.RawMessage) string {
+	text, _ := parseAssistant(m)
+	return text
+}
+
+func TestStreamWriter_ReportsToolCalls(t *testing.T) {
+	var tools []cli.ToolEvent
+	var texts []string
+	w := NewStreamWriter(func(s string) { texts = append(texts, s) }).WithToolHandler(func(ev cli.ToolEvent) { tools = append(tools, ev) })
+
+	output := `{"type":"assistant","message":{"content":[{"type":"text","text":"Running tests"},` +
+		`{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"go test ./...\nmore","description":"Run the test suite"}}]}}` + "\n" +
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t2","name":"Read","input":{"file_path":"/app/data/1/main.go"}}]}}` + "\n" +
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t3","name":"mcp__github__create_issue","input":{}}]}}` + "\n" +
+		`{"type":"result","result":"done"}` + "\n"
+	_, err := w.Write([]byte(output))
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"Running tests"}, texts)
+	assert.Equal(t, []cli.ToolEvent{
+		{Name: "Bash", Detail: "Run the test suite"},
+		{Name: "Read", Detail: "main.go"},
+		{Name: "github", Detail: "create_issue"},
+	}, tools)
+	assert.Equal(t, "done", w.Result().Text)
+}
+
+func TestToolEvent_Details(t *testing.T) {
+	cases := []struct {
+		name, input string
+		want        cli.ToolEvent
+	}{
+		{"Bash", `{"command":"ls -la\necho hi"}`, cli.ToolEvent{Name: "Bash", Detail: "ls -la"}},
+		{"Grep", `{"pattern":"TODO"}`, cli.ToolEvent{Name: "Grep", Detail: "TODO"}},
+		{"WebFetch", `{"url":"https://example.com/a?b=1"}`, cli.ToolEvent{Name: "WebFetch", Detail: "example.com"}},
+		{"WebSearch", `{"query":"go 1.25 release"}`, cli.ToolEvent{Name: "WebSearch", Detail: "go 1.25 release"}},
+		{"Task", `{"description":"Explore repo"}`, cli.ToolEvent{Name: "Task", Detail: "Explore repo"}},
+		{"Skill", `{"skill":"schedule"}`, cli.ToolEvent{Name: "Skill", Detail: "schedule"}},
+		{"TodoWrite", `{"todos":[]}`, cli.ToolEvent{Name: "TodoWrite"}},
+		{"Bash", `not json`, cli.ToolEvent{Name: "Bash"}},
+	}
+	for _, tc := range cases {
+		assert.Equal(t, tc.want, toolEvent(tc.name, json.RawMessage(tc.input)), tc.input)
+	}
+
+	long := toolEvent("Bash", json.RawMessage(`{"description":"`+strings.Repeat("я", 100)+`"}`))
+	assert.Equal(t, maxDetailRunes, len([]rune(long.Detail)))
+	assert.True(t, strings.HasSuffix(long.Detail, "…"))
 }

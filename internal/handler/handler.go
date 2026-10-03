@@ -18,6 +18,7 @@ import (
 	"github.com/nickalie/nclaw/internal/config"
 	"github.com/nickalie/nclaw/internal/invoker"
 	"github.com/nickalie/nclaw/internal/pipeline"
+	"github.com/nickalie/nclaw/internal/progress"
 )
 
 // Handler processes incoming Telegram messages.
@@ -28,6 +29,7 @@ type Handler struct {
 	Bot         *bot.Bot
 	BotUsername string
 	Send        pipeline.SendFunc
+	Progress    progress.MessageAPI
 }
 
 // AllowChat is bot middleware that drops updates without a message or from chats
@@ -80,15 +82,20 @@ func (h *Handler) RunBatch(ctx context.Context, key chatqueue.Key, batch []Inbou
 	log.Printf("handler: running %d message(s) for chat=%d thread=%d prompt_len=%d", len(batch), key.ChatID, key.ThreadID, len(prompt))
 
 	var stream *pipeline.StreamState
+	reporter := h.newReporter(key)
 	out := h.Invoker.Run(ctx, invoker.Request{
 		ChatID:   key.ChatID,
 		ThreadID: key.ThreadID,
 		Prompt:   prompt,
 		Configure: func(c cli.Client) {
 			stream = h.Pipeline.AttachStream(ctx, c, key.ChatID, key.ThreadID)
+			if pc, ok := c.(cli.ProgressClient); ok && reporter != nil {
+				pc.OnToolUse(reporter.OnTool)
+			}
 		},
 	})
 	stopTyping()
+	reporter.Finish(context.WithoutCancel(ctx))
 
 	if errors.Is(out.Err, chatqueue.ErrStopped) || errors.Is(out.Err, chatqueue.ErrShuttingDown) {
 		log.Printf("handler: run for chat=%d thread=%d interrupted: %v", key.ChatID, key.ThreadID, out.Err)
@@ -98,6 +105,13 @@ func (h *Handler) RunBatch(ctx context.Context, key chatqueue.Key, batch []Inbou
 	deliverCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
 	h.Pipeline.Process(deliverCtx, withErrorText(out.Result, out.Err), out.Err, key.ChatID, key.ThreadID, out.Dir, stream.Streamed())
+}
+
+func (h *Handler) newReporter(key chatqueue.Key) *progress.Reporter {
+	if h.Progress == nil {
+		return nil
+	}
+	return progress.New(h.Progress, key.ChatID, key.ThreadID, progress.Options{})
 }
 
 func withErrorText(result *cli.Result, err error) *cli.Result {

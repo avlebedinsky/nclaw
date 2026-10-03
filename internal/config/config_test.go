@@ -314,3 +314,12 @@ func TestCLITimeout(t *testing.T) {
 		})
 	}
 }
+
+func TestProgress_DefaultsToEnabled(t *testing.T) {
+	viper.Reset()
+	assert.True(t, Progress())
+
+	viper.Set("progress", "false")
+	defer viper.Reset()
+	assert.False(t, Progress())
+}
