@@ -210,11 +210,11 @@ func atomicWriteJSON(path string, data map[string]json.RawMessage) error {
 }
 
 func defaultCredentialsPath() (string, error) {
-	home, err := os.UserHomeDir()
+	dir, err := ConfigDir()
 	if err != nil {
-		return "", fmt.Errorf("home dir: %w", err)
+		return "", err
 	}
-	return filepath.Join(home, ".claude", credentialFile), nil
+	return filepath.Join(dir, credentialFile), nil
 }
 
 func refreshAccessToken(refreshToken string) (*tokenRefreshResponse, error) {

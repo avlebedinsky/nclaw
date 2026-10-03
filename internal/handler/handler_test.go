@@ -1077,3 +1077,70 @@ func TestFetchToFile_ErrorOmitsURL(t *testing.T) {
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "SECRET")
 }
+
+// --- provider capability tests ---
+
+type sessionProvider struct {
+	mockProvider
+	size     int64
+	archived []string
+}
+
+func (p *sessionProvider) NativeSkills() bool { return true }
+func (p *sessionProvider) SessionSize(string) (int64, bool) {
+	return p.size, p.size > 0
+}
+func (p *sessionProvider) ArchiveSession(dir string) error {
+	p.archived = append(p.archived, dir)
+	return nil
+}
+
+func TestMaybeResetSession_ArchivesOversizedSession(t *testing.T) {
+	viper.Set("max_session_bytes", 100)
+	defer viper.Reset()
+
+	p := &sessionProvider{size: 150}
+	(&Handler{Provider: p}).maybeResetSession("/data/1")
+
+	assert.Equal(t, []string{"/data/1"}, p.archived)
+}
+
+func TestMaybeResetSession_KeepsSmallSession(t *testing.T) {
+	viper.Set("max_session_bytes", 100)
+	defer viper.Reset()
+
+	p := &sessionProvider{size: 50}
+	(&Handler{Provider: p}).maybeResetSession("/data/1")
+
+	assert.Empty(t, p.archived)
+}
+
+func TestMaybeResetSession_DisabledByDefault(t *testing.T) {
+	p := &sessionProvider{size: 1 << 30}
+	(&Handler{Provider: p}).maybeResetSession("/data/1")
+
+	assert.Empty(t, p.archived)
+}
+
+func writeSkill(t *testing.T) {
+	t.Helper()
+	configDir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", configDir)
+	skillDir := filepath.Join(configDir, "skills", "demo")
+	require.NoError(t, os.MkdirAll(skillDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("demo skill body"), 0o644))
+}
+
+func TestSkillsPrompt_InjectedForNonNativeProvider(t *testing.T) {
+	writeSkill(t)
+	h := &Handler{Provider: &mockProvider{name: "claude"}}
+
+	assert.Contains(t, h.skillsPrompt(), "demo skill body")
+}
+
+func TestSkillsPrompt_SkippedForNativeProvider(t *testing.T) {
+	writeSkill(t)
+	h := &Handler{Provider: &sessionProvider{}}
+
+	assert.Empty(t, h.skillsPrompt())
+}

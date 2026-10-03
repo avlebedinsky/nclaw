@@ -45,3 +45,16 @@ type Provider interface {
 	Version() (string, error)
 	Name() string
 }
+
+// NativeSkillsProvider is implemented by providers whose CLI loads skills from its
+// own skills directory, so nclaw does not need to inject them into the prompt.
+type NativeSkillsProvider interface {
+	NativeSkills() bool
+}
+
+// SessionStore is implemented by providers that can measure and archive the
+// persisted session of a working directory.
+type SessionStore interface {
+	SessionSize(dir string) (int64, bool)
+	ArchiveSession(dir string) error
+}

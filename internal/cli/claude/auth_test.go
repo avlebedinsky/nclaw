@@ -357,3 +357,10 @@ func TestAtomicWriteJSON_InvalidPath(t *testing.T) {
 	err := atomicWriteJSON(path, data)
 	assert.Error(t, err)
 }
+
+func TestDefaultCredentialsPath_HonorsClaudeConfigDir(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "/custom/claude")
+	path, err := defaultCredentialsPath()
+	require.NoError(t, err)
+	assert.Equal(t, "/custom/claude/.credentials.json", path)
+}

@@ -7,8 +7,12 @@ type Provider struct {
 	execPath string
 }
 
-// Compile-time check: *Provider implements cli.Provider.
-var _ cli.Provider = (*Provider)(nil)
+// Compile-time checks: *Provider implements cli.Provider and its optional capabilities.
+var (
+	_ cli.Provider             = (*Provider)(nil)
+	_ cli.NativeSkillsProvider = (*Provider)(nil)
+	_ cli.SessionStore         = (*Provider)(nil)
+)
 
 // NewProvider creates a new Claude CLI provider.
 func NewProvider(execPath ...string) *Provider {
@@ -45,4 +49,19 @@ func (p *Provider) newClaude() *Claude {
 		c.ExecPath(p.execPath)
 	}
 	return c
+}
+
+// NativeSkills reports that the CLI loads skills from its own skills directory.
+func (p *Provider) NativeSkills() bool {
+	return true
+}
+
+// SessionSize returns the size of the latest session transcript for dir.
+func (p *Provider) SessionSize(dir string) (int64, bool) {
+	return SessionSize(dir)
+}
+
+// ArchiveSession archives the session history for dir so the next run starts fresh.
+func (p *Provider) ArchiveSession(dir string) error {
+	return ArchiveSession(dir)
 }

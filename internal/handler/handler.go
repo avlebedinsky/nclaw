@@ -13,6 +13,7 @@ import (
 	"github.com/go-telegram/bot/models"
 
 	"github.com/nickalie/nclaw/internal/cli"
+	"github.com/nickalie/nclaw/internal/cli/claude"
 	"github.com/nickalie/nclaw/internal/config"
 	"github.com/nickalie/nclaw/internal/pipeline"
 	"github.com/nickalie/nclaw/internal/scheduler"
@@ -143,11 +144,8 @@ func (h *Handler) callCLI(
 	taskPrompt := h.Scheduler.FormatTaskList(chatID, threadID)
 	systemPrompt := telegram.Prompt + "\n\n" + taskPrompt
 
-	if h.Provider.Name() != "claude" && h.Provider.Name() != "claudish" {
-		skillsDir := filepath.Join(os.Getenv("HOME"), ".claude", "skills")
-		if skills := loadSkillsPrompt(skillsDir); skills != "" {
-			systemPrompt += "\n\n" + skills
-		}
+	if skills := h.skillsPrompt(); skills != "" {
+		systemPrompt += "\n\n" + skills
 	}
 
 	if err := h.Provider.PreInvoke(); err != nil {
@@ -172,15 +170,20 @@ func (h *Handler) callCLI(
 	return result, stream.Streamed(), err
 }
 
-// maybeResetSession archives the Claude Code session transcript for dir
-// when it has grown past config.MaxSessionBytes(), so the next message
-// starts a fresh conversation instead of risking a long-context billing
-// error ("Usage credits are required for long context requests"). Only
-// applies to the claude/claudish backends, which share Claude Code's
-// on-disk session format; other backends are left untouched.
+func (h *Handler) skillsPrompt() string {
+	if n, ok := h.Provider.(cli.NativeSkillsProvider); ok && n.NativeSkills() {
+		return ""
+	}
+	dir, err := claude.ConfigDir()
+	if err != nil {
+		return ""
+	}
+	return loadSkillsPrompt(filepath.Join(dir, "skills"))
+}
+
 func (h *Handler) maybeResetSession(dir string) {
-	name := h.Provider.Name()
-	if name != "claude" && name != "claudish" {
+	store, ok := h.Provider.(cli.SessionStore)
+	if !ok {
 		return
 	}
 
@@ -189,17 +192,12 @@ func (h *Handler) maybeResetSession(dir string) {
 		return
 	}
 
-	projectsDir, err := claudeProjectsDir()
-	if err != nil {
+	size, found := store.SessionSize(dir)
+	if !found || size < maxBytes {
 		return
 	}
 
-	size, ok := claudeSessionSize(projectsDir, dir)
-	if !ok || size < maxBytes {
-		return
-	}
-
-	if err := resetClaudeSession(projectsDir, dir); err != nil {
+	if err := store.ArchiveSession(dir); err != nil {
 		log.Printf("handler: failed to reset oversized session in dir=%s: %v", dir, err)
 		return
 	}
