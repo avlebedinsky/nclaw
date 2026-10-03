@@ -58,6 +58,7 @@ Three input channels (handler, scheduler, webhook) put their work into a per-cha
 - `internal/invoker/` - Single entry point for CLI runs: working dir (`.isolated` for isolated tasks), system prompt, time header, session reset, timeout
 - `internal/handler/` - Telegram message handling, prompt composition (batches, albums, voice transcripts), bot commands (`/stop`, `/new`, `/status`, `/login`), shutdown notices
 - `internal/progress/` - Status message edited as tool calls stream in
+- `internal/draft/` - Live Telegram draft of the answer being written, for private chats
 - `internal/authwatch/` - Warns the admin chat before the backend's stored sign-in expires
 - `internal/transcribe/` - Voice/video-note transcription with ffmpeg + whisper.cpp
 - `internal/skills/` - Installs bundled skills that are missing into the CLI skills dirs at startup
@@ -110,7 +111,7 @@ The scheduler and webhook manager implement the `BlockExecutor` interface and ar
 - **Outbound**: `sendfile.ExecuteBlocks()` scans for `nclaw:sendfile` code blocks and sends matched files as Telegram documents. Relative paths resolve against the run's working directory; files must resolve to within the chat directory or the OS temp directory; paths outside these locations are rejected.
 
 ### Message Formatting
-Replies use Telegram HTML formatting with plain-text fallback (tags stripped, entities decoded). Long messages are split by visible UTF-16 length (max 4096), preferring newline boundaries; open tags are closed at each cut and reopened in the next chunk.
+Replies use Telegram HTML formatting with plain-text fallback (tags stripped, entities decoded). Long messages are split by visible UTF-16 length (max 4096), preferring newline boundaries; open tags are closed at each cut and reopened in the next chunk. A reply needing more than 3 chunks is sent as its first chunk plus `answer.md` (`telegram.Markdown` converts the HTML); if the document fails, the remaining chunks follow. Only the first message of a reply quotes the question (`pipeline.Dest.ReplyTo`). The handler marks queued/running/done/failed messages with reactions (`NCLAW_REACTIONS`), and in private chats `draft.Drafter` streams the answer being written (`cli.PartialClient`, Claude's `--include-partial-messages`) through `sendMessageDraft` (`NCLAW_LIVE_DRAFTS`); the draft's stop button acts like `/stop`.
 
 ## Configuration
 
@@ -137,6 +138,8 @@ Optional:
 - `NCLAW_TIMEZONE` - Timezone for scheduler (default: system local)
 - `NCLAW_CLI_TIMEOUT` - Maximum duration of one CLI run (default: `60m`; bare numbers are seconds; `0` disables)
 - `NCLAW_PROGRESS` - Show a status message with the agent's current step while a request runs (default: `true`)
+- `NCLAW_LIVE_DRAFTS` - In private chats, stream the answer being written into a Telegram draft (default: `true`; Claude backend)
+- `NCLAW_REACTIONS` - Mark messages with 👀/✍/👌/💔 reactions as they are queued, run, answered or fail (default: `true`)
 - `NCLAW_WHISPER_MODEL` - whisper.cpp ggml model path; empty disables voice transcription (set in the Docker images)
 - `NCLAW_WHISPER_LANGUAGE` - Spoken-language hint for transcription (default: `auto`)
 - `NCLAW_WHISPER_BIN` - whisper.cpp CLI (default: `whisper-cli`)

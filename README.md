@@ -62,6 +62,8 @@ The recommended way to run NClaw is inside Docker — the container serves as a 
 - **Voice messages** — Voice notes and video notes are transcribed locally with whisper.cpp and handled like typed messages.
 - **Ordered message queue** — Messages sent while the assistant is busy are answered in order, in a single combined run.
 - **Live progress** — A status message shows the agent's current step (e.g. "🔧 Bash: Run the test suite") while it works.
+- **Live answer and reactions** — In private chats the answer appears as it is being written (Claude backend), with a stop button. Messages get a reaction while they wait (👀), run (✍), succeed (👌) or fail (💔), and the answer is sent as a reply to the question.
+- **Long answers as a file** — An answer that would take more than three messages arrives as its beginning plus the full text in `answer.md`. Tables are rendered as aligned text, since Telegram cannot display them.
 - **Chat commands** — `/stop` cancels the current run, `/new` starts a fresh conversation, `/status` shows what the bot is doing.
 - **File delivery** — The assistant can send files back to you (generated reports, exports, code).
 - **Scheduled tasks** — Create recurring or one-time jobs using natural language.
@@ -603,6 +605,8 @@ NClaw variables use the `NCLAW_` prefix. Provider API keys use the provider's na
 | `NCLAW_CLAUDE_EXEC_PATH` | No | `claude` | Full path to the Claude CLI binary |
 | `NCLAW_CLI_TIMEOUT` | No | `60m` | Maximum duration of one CLI run (Go duration, or a number of seconds; `0` disables). A run that exceeds it is stopped |
 | `NCLAW_PROGRESS` | No | `true` | Show a status message with the agent's current step while a request runs (Claude/Claudish backends) |
+| `NCLAW_LIVE_DRAFTS` | No | `true` | In private chats, show the answer as it is being written in a Telegram draft (Claude backend) |
+| `NCLAW_REACTIONS` | No | `true` | Mark messages with a reaction while they are queued, worked on, answered or failed |
 | `NCLAW_STARTUP_NOTIFICATION` | No | `false` | Send a "bot started" message to whitelisted chats on startup |
 | `NCLAW_STREAM_MESSAGES` | No | `false` | Send every intermediate assistant message as a separate reply instead of only the final one |
 | `NCLAW_WHISPER_MODEL` | No | set in the images | Path to a whisper.cpp ggml model; empty disables voice transcription |
