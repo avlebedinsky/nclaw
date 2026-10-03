@@ -437,3 +437,57 @@ func TestProcess_RepliesWithFirstChunkOnly(t *testing.T) {
 		assert.Equal(t, 2, c.threadID)
 	}
 }
+
+func longHTMLAnswer() string {
+	return "<b>Report</b>\n" + strings.Repeat("row of the report\n", 1000)
+}
+
+func TestProcess_LongAnswerGoesToFile(t *testing.T) {
+	ms := &mockSend{}
+	var docName, docBody, docCaption string
+	senders := sendfile.Senders{Doc: func(_ context.Context, _ int64, _ int, filename string, data []byte, caption string) error {
+		docName, docBody, docCaption = filename, string(data), caption
+		return nil
+	}}
+	p := New(ms.fn(), senders, true)
+
+	text := longHTMLAnswer()
+	p.Process(context.Background(), &cli.Result{Text: text, FullText: text}, nil, Dest{ChatID: 1, ReplyTo: 9}, "/tmp", false)
+
+	require.Len(t, ms.calls, 1)
+	assert.Equal(t, 9, ms.calls[0].replyTo)
+	assert.True(t, strings.HasPrefix(ms.calls[0].text, "<b>Report</b>"))
+	assert.Equal(t, "answer.md", docName)
+	assert.True(t, strings.HasPrefix(docBody, "**Report**\nrow of the report"))
+	assert.Equal(t, longAnswerCaption, docCaption)
+}
+
+func TestProcess_LongAnswerFallsBackToChunks(t *testing.T) {
+	ms := &mockSend{}
+	senders := sendfile.Senders{Doc: func(context.Context, int64, int, string, []byte, string) error {
+		return errors.New("too big")
+	}}
+	p := New(ms.fn(), senders, true)
+
+	text := longHTMLAnswer()
+	p.Process(context.Background(), &cli.Result{Text: text, FullText: text}, nil, Dest{ChatID: 1, ReplyTo: 9}, "/tmp", false)
+
+	assert.Greater(t, len(ms.calls), maxReplyChunks)
+	assert.Equal(t, 9, ms.calls[0].replyTo)
+	assert.Zero(t, ms.calls[1].replyTo)
+}
+
+func TestProcess_ShortAnswerStaysInChat(t *testing.T) {
+	ms := &mockSend{}
+	docSent := false
+	p := New(ms.fn(), sendfile.Senders{Doc: func(context.Context, int64, int, string, []byte, string) error {
+		docSent = true
+		return nil
+	}}, true)
+
+	text := strings.Repeat("line\n", 1200)
+	p.Process(context.Background(), &cli.Result{Text: text, FullText: text}, nil, Dest{ChatID: 1}, "/tmp", false)
+
+	assert.False(t, docSent)
+	assert.Len(t, ms.calls, 2)
+}

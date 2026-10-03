@@ -29,6 +29,11 @@ type Dest struct {
 // SendFunc sends a text message to a destination with an optional parse mode.
 type SendFunc func(ctx context.Context, dest Dest, text, parseMode string) error
 
+const (
+	maxReplyChunks    = 3
+	longAnswerCaption = "📄 The full answer is in the file"
+)
+
 // Pipeline orchestrates post-Claude response processing: block execution,
 // stripping, status appending, file sending, and reply delivery.
 type Pipeline struct {
@@ -233,7 +238,23 @@ func appendStatusToLast(texts, msgs []string) []string {
 
 func (p *Pipeline) sendReply(ctx context.Context, dest Dest, text string) {
 	log.Printf("pipeline: sending reply len=%d", len(text))
-	for _, chunk := range telegram.SplitMessage(text, telegram.MaxMessageLen) {
+	chunks := telegram.SplitMessage(text, telegram.MaxMessageLen)
+	if len(chunks) <= maxReplyChunks || p.senders.Doc == nil {
+		p.sendChunks(ctx, dest, chunks)
+		return
+	}
+
+	p.sendChunk(ctx, dest, chunks[0])
+	file := []byte(telegram.Markdown(text))
+	if err := p.senders.Doc(ctx, dest.ChatID, dest.ThreadID, "answer.md", file, longAnswerCaption); err != nil {
+		log.Printf("pipeline: send long answer as file: %v", err)
+		dest.ReplyTo = 0
+		p.sendChunks(ctx, dest, chunks[1:])
+	}
+}
+
+func (p *Pipeline) sendChunks(ctx context.Context, dest Dest, chunks []string) {
+	for _, chunk := range chunks {
 		p.sendChunk(ctx, dest, chunk)
 		dest.ReplyTo = 0
 	}

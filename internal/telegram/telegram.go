@@ -18,6 +18,8 @@ Rules:
 - Escape &, < and > in regular text as &amp; &lt; &gt; (but not inside tags themselves)
 - Do NOT use <p>, <br>, <div>, <h1>-<h6>, <ul>, <li>, <ol>, <table>, or any other HTML tags
 - For lists, use plain text with bullet characters or numbers
+- Telegram cannot display tables (neither HTML nor Markdown ones):
+  put tabular data inside <pre> with columns aligned by spaces, or use a list
 - For section titles, use <b>bold text</b> on its own line
 - Keep formatting minimal and clean`
 
