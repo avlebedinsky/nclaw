@@ -37,8 +37,3 @@ func DeleteWebhook(database *gorm.DB, id string) error {
 	}
 	return nil
 }
-
-// UpdateWebhookStatus sets the status of a webhook.
-func UpdateWebhookStatus(database *gorm.DB, id, status string) error {
-	return database.Model(&model.WebhookRegistration{}).Where("id = ?", id).Update("status", status).Error
-}

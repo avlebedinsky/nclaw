@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -18,6 +19,11 @@ import (
 	"github.com/nickalie/nclaw/internal/invoker"
 	"github.com/nickalie/nclaw/internal/model"
 	"github.com/nickalie/nclaw/internal/pipeline"
+)
+
+const (
+	keepRunLogs           = 20
+	finishedTaskRetention = 30 * 24 * time.Hour
 )
 
 // Scheduler manages scheduled tasks using gocron and SQLite persistence.
@@ -67,8 +73,15 @@ func (s *Scheduler) Shutdown() error {
 	return s.cron.Shutdown()
 }
 
-// LoadTasks reads all active tasks from the database and registers them with gocron.
+// LoadTasks removes long-finished tasks, then reads all active tasks from the
+// database and registers them with gocron.
 func (s *Scheduler) LoadTasks() {
+	if n, err := db.DeleteFinishedTasks(s.db, time.Now().Add(-finishedTaskRetention)); err != nil {
+		log.Printf("scheduler: delete finished tasks: %v", err)
+	} else if n > 0 {
+		log.Printf("scheduler: deleted %d finished tasks", n)
+	}
+
 	var tasks []model.ScheduledTask
 	if err := s.db.Where("status = ?", model.StatusActive).Find(&tasks).Error; err != nil {
 		log.Printf("scheduler: load tasks: %v", err)
@@ -346,7 +359,10 @@ func (s *Scheduler) logRunTx(tx *gorm.DB, taskID, reply string, runErr error, du
 	} else {
 		runLog.Result = &reply
 	}
-	return db.LogRun(tx, runLog)
+	if err := db.LogRun(tx, runLog); err != nil {
+		return err
+	}
+	return db.PruneRunLogs(tx, taskID, keepRunLogs)
 }
 
 func (s *Scheduler) updateAfterRunTx(
@@ -419,6 +435,9 @@ func FormatTaskList(database *gorm.DB, loc *time.Location, chatID int64, threadI
 		log.Printf("scheduler: list tasks: %v", err)
 		return "Current scheduled tasks: none"
 	}
+	tasks = slices.DeleteFunc(tasks, func(t model.ScheduledTask) bool {
+		return t.Status != model.StatusActive && t.Status != model.StatusPaused
+	})
 	if len(tasks) == 0 {
 		return "Current scheduled tasks: none"
 	}

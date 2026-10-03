@@ -999,3 +999,22 @@ func TestExecuteTask_IsolatedRunsOutsideChatSession(t *testing.T) {
 	assert.Contains(t, c.systemPrompt, telegram.Prompt)
 	assert.Equal(t, []string{"reply"}, *sent)
 }
+
+func TestExecuteTask_KeepsBoundedRunLogs(t *testing.T) {
+	s, _, _, _ := setupRecordingScheduler(t)
+	s.Start()
+	defer s.Shutdown()
+	task := &model.ScheduledTask{
+		ID: model.GenerateTaskID(), ChatID: 100, Prompt: "tick", ScheduleType: model.ScheduleInterval, ScheduleValue: "1h",
+		ContextMode: model.ContextGroup, Status: model.StatusActive, CreatedAt: time.Now(),
+	}
+	require.NoError(t, s.CreateTask(task))
+
+	for range keepRunLogs + 3 {
+		s.executeTask(task.ID)
+	}
+
+	var count int64
+	require.NoError(t, s.db.Model(&model.TaskRunLog{}).Where("task_id = ?", task.ID).Count(&count).Error)
+	assert.Equal(t, int64(keepRunLogs), count)
+}

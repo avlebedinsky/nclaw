@@ -91,31 +91,6 @@ func TestListTasksByChat(t *testing.T) {
 	assert.Empty(t, tasks)
 }
 
-func TestGetDueTasks(t *testing.T) {
-	database := setupTestDB(t)
-
-	pastTime := time.Now().Add(-time.Hour)
-	futureTime := time.Now().Add(time.Hour)
-
-	due := sampleTask(100, 0)
-	due.NextRun = &pastTime
-	require.NoError(t, CreateTask(database, due))
-
-	notDue := sampleTask(100, 0)
-	notDue.NextRun = &futureTime
-	require.NoError(t, CreateTask(database, notDue))
-
-	paused := sampleTask(100, 0)
-	paused.NextRun = &pastTime
-	paused.Status = model.StatusPaused
-	require.NoError(t, CreateTask(database, paused))
-
-	tasks, err := GetDueTasks(database)
-	require.NoError(t, err)
-	assert.Len(t, tasks, 1)
-	assert.Equal(t, due.ID, tasks[0].ID)
-}
-
 func TestUpdateTaskStatus(t *testing.T) {
 	database := setupTestDB(t)
 	task := sampleTask(100, 0)
@@ -190,4 +165,62 @@ func TestLogRun(t *testing.T) {
 	assert.Len(t, logs, 1)
 	assert.Equal(t, "success", logs[0].Status)
 	assert.Equal(t, int64(1500), logs[0].DurationMs)
+}
+
+func TestPruneRunLogs_KeepsNewest(t *testing.T) {
+	database := setupTestDB(t)
+	task := sampleTask(100, 0)
+	require.NoError(t, CreateTask(database, task))
+	other := sampleTask(100, 0)
+	require.NoError(t, CreateTask(database, other))
+	for i := range 5 {
+		require.NoError(t, LogRun(database, &model.TaskRunLog{TaskID: task.ID, RunAt: time.Now(), DurationMs: int64(i), Status: "success"}))
+	}
+	require.NoError(t, LogRun(database, &model.TaskRunLog{TaskID: other.ID, RunAt: time.Now(), Status: "success"}))
+
+	require.NoError(t, PruneRunLogs(database, task.ID, 2))
+
+	var logs []model.TaskRunLog
+	require.NoError(t, database.Where("task_id = ?", task.ID).Order("id").Find(&logs).Error)
+	require.Len(t, logs, 2)
+	assert.Equal(t, int64(3), logs[0].DurationMs)
+	assert.Equal(t, int64(4), logs[1].DurationMs)
+
+	var otherCount int64
+	require.NoError(t, database.Model(&model.TaskRunLog{}).Where("task_id = ?", other.ID).Count(&otherCount).Error)
+	assert.Equal(t, int64(1), otherCount)
+}
+
+func TestDeleteFinishedTasks(t *testing.T) {
+	database := setupTestDB(t)
+	old := time.Now().Add(-40 * 24 * time.Hour)
+	recent := time.Now().Add(-time.Hour)
+
+	mk := func(status string, lastRun *time.Time, created time.Time) *model.ScheduledTask {
+		task := sampleTask(100, 0)
+		task.Status, task.LastRun, task.CreatedAt = status, lastRun, created
+		require.NoError(t, CreateTask(database, task))
+		require.NoError(t, LogRun(database, &model.TaskRunLog{TaskID: task.ID, RunAt: created, Status: "success"}))
+		return task
+	}
+	oldCompleted := mk(model.StatusCompleted, &old, old)
+	oldFailedNeverRan := mk(model.StatusFailed, nil, old)
+	recentCompleted := mk(model.StatusCompleted, &recent, old)
+	oldActive := mk(model.StatusActive, &old, old)
+
+	n, err := DeleteFinishedTasks(database, time.Now().Add(-30*24*time.Hour))
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), n)
+
+	for _, gone := range []*model.ScheduledTask{oldCompleted, oldFailedNeverRan} {
+		_, err := GetTask(database, gone.ID)
+		assert.Error(t, err)
+		var logs int64
+		require.NoError(t, database.Model(&model.TaskRunLog{}).Where("task_id = ?", gone.ID).Count(&logs).Error)
+		assert.Zero(t, logs)
+	}
+	for _, kept := range []*model.ScheduledTask{recentCompleted, oldActive} {
+		_, err := GetTask(database, kept.ID)
+		assert.NoError(t, err)
+	}
 }

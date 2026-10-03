@@ -283,3 +283,23 @@ func TestExecuteBlocks_TaskActionUnknownTask(t *testing.T) {
 	result := s.ExecuteBlocks("```nclaw:schedule\n{\"action\":\"cancel\",\"task_id\":\"task-missing\"}\n```", 100, 0)
 	assert.Contains(t, result, "task not found: task-missing")
 }
+
+func TestFormatTaskList_HidesFinishedTasks(t *testing.T) {
+	s := setupTestScheduler(t)
+	for id, status := range map[string]string{
+		"task-active": model.StatusActive, "task-paused": model.StatusPaused,
+		"task-done": model.StatusCompleted, "task-failed": model.StatusFailed,
+	} {
+		require.NoError(t, s.db.Create(&model.ScheduledTask{
+			ID: id, ChatID: 100, Prompt: "p", ScheduleType: model.ScheduleOnce, ScheduleValue: "2026-01-01T00:00:00",
+			ContextMode: model.ContextGroup, Status: status, CreatedAt: time.Now(),
+		}).Error)
+	}
+
+	result := FormatTaskList(s.db, time.UTC, 100, 0)
+
+	assert.Contains(t, result, "task-active")
+	assert.Contains(t, result, "task-paused")
+	assert.NotContains(t, result, "task-done")
+	assert.NotContains(t, result, "task-failed")
+}

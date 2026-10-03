@@ -86,15 +86,3 @@ func TestDeleteWebhook_NotFound(t *testing.T) {
 	err := DeleteWebhook(database, "nonexistent-id")
 	assert.Error(t, err)
 }
-
-func TestUpdateWebhookStatus(t *testing.T) {
-	database := setupTestDB(t)
-	wh := sampleWebhook(100, 0)
-	require.NoError(t, CreateWebhook(database, wh))
-
-	require.NoError(t, UpdateWebhookStatus(database, wh.ID, model.WebhookStatusPaused))
-
-	got, err := GetWebhookByID(database, wh.ID)
-	require.NoError(t, err)
-	assert.Equal(t, model.WebhookStatusPaused, got.Status)
-}
