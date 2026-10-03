@@ -37,6 +37,7 @@ type Handler struct {
 	React       MessageReactor
 	Drafts      draft.API
 	AuthStatus  func() string
+	Logins      *Logins
 }
 
 // MessageReactor sets the bot's reaction on a message; an empty emoji clears it.
@@ -111,6 +112,9 @@ func (h *Handler) Default(_ context.Context, _ *bot.Bot, update *models.Update) 
 		return
 	}
 	if _, forMe, isCmd := parseCommand(msg.Text, h.BotUsername); isCmd && !forMe {
+		return
+	}
+	if h.takeLoginCode(msg) {
 		return
 	}
 

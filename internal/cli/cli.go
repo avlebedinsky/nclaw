@@ -76,6 +76,20 @@ type AuthProvider interface {
 	IsAuthFailure(output string) bool
 }
 
+// LoginProvider is implemented by providers that can sign in again interactively.
+type LoginProvider interface {
+	// StartLogin starts a sign-in that lives until ctx is done and returns once its link is known.
+	StartLogin(ctx context.Context) (LoginSession, error)
+}
+
+// LoginSession is a sign-in waiting for the code the user gets after opening URL.
+type LoginSession interface {
+	URL() string
+	// Submit passes the code to the sign-in and waits for its outcome.
+	Submit(code string) error
+	Cancel()
+}
+
 // EphemeralClient is implemented by clients that can run without persisting the
 // session, so one-off runs leave no conversation behind.
 type EphemeralClient interface {

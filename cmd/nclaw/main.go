@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"syscall"
 	"time"
@@ -190,25 +191,25 @@ func setupBot(database *gorm.DB, provider cli.Provider) *app {
 	return &app{bot: b, handler: h, queue: queue, sched: sched, webhookMgr: webhookMgr, webhookSrv: webhookSrv, authWatch: authWatch}
 }
 
-const signInRenewHint = "To sign in again, run claude auth login inside the bot's container."
-
 func wireAuth(provider cli.Provider, h *handler.Handler, p *pipeline.Pipeline, loc *time.Location) *authwatch.Watcher {
 	auth, ok := provider.(cli.AuthProvider)
 	if !ok {
 		return nil
 	}
+	admin := config.AdminChatID()
+	h.Logins = newLogins(provider, admin)
+	renewHint, failureHint := signInHints(h.Logins != nil)
 	p.SetFailureHint(func(output string) string {
 		if auth.IsAuthFailure(output) {
-			return "🔑 The bot's Claude sign-in has expired or was revoked. " + signInRenewHint
+			return failureHint
 		}
 		return ""
 	})
 
-	admin := config.AdminChatID()
 	w := authwatch.New(authwatch.Options{
 		Name:      "Claude",
 		Expiry:    auth.AuthExpiry,
-		RenewHint: signInRenewHint,
+		RenewHint: renewHint,
 		Location:  loc,
 		Notify: func(ctx context.Context, text string) error {
 			return h.Send(ctx, pipeline.Dest{ChatID: admin}, text, "")
@@ -221,6 +222,23 @@ func wireAuth(provider cli.Provider, h *handler.Handler, p *pipeline.Pipeline, l
 	}
 	log.Printf("authwatch: sign-in expiry warnings go to chat %d", admin)
 	return w
+}
+
+func newLogins(provider cli.Provider, admin int64) *handler.Logins {
+	lp, ok := provider.(cli.LoginProvider)
+	if !ok || admin <= 0 {
+		return nil
+	}
+	return &handler.Logins{Provider: lp, AdminChatID: admin}
+}
+
+func signInHints(loginEnabled bool) (renew, failure string) {
+	const expired = "🔑 The bot's Claude sign-in has expired or was revoked. "
+	if loginEnabled {
+		return "Send /login here to sign in again.", expired + "Send /login in the admin's private chat with the bot to sign in again."
+	}
+	const manual = "To sign in again, run claude auth login inside the bot's container."
+	return manual, expired + manual
 }
 
 func newTranscriber() handler.Transcriber {
@@ -274,6 +292,13 @@ func registerCommands(b *bot.Bot, h *handler.Handler) {
 	b.RegisterHandlerMatchFunc(h.MatchStopGeneration, h.StopGeneration)
 	if _, err := b.SetMyCommands(ctx, &bot.SetMyCommandsParams{Commands: handler.Commands}); err != nil {
 		log.Printf("telegram: setMyCommands: %v", err)
+	}
+	if h.Logins != nil {
+		adminCommands := append(slices.Clone(handler.Commands), handler.LoginCommand)
+		scope := &models.BotCommandScopeChat{ChatID: h.Logins.AdminChatID}
+		if _, err := b.SetMyCommands(ctx, &bot.SetMyCommandsParams{Commands: adminCommands, Scope: scope}); err != nil {
+			log.Printf("telegram: setMyCommands for the admin chat: %v", err)
+		}
 	}
 }
 
@@ -337,7 +362,9 @@ func printVersion() error {
 func newProvider(backend string) (cli.Provider, error) {
 	switch backend {
 	case "claude":
-		return claude.NewProvider(config.ClaudeExecPath()), nil
+		p := claude.NewProvider(config.ClaudeExecPath())
+		p.SetLoginEmail(config.LoginEmail())
+		return p, nil
 	case "claudish":
 		return claudish.NewProvider(
 			config.Model(), config.ModelOpus(), config.ModelSonnet(), config.ModelHaiku(), config.ModelSubagent(),

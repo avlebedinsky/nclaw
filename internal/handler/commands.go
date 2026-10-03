@@ -25,6 +25,9 @@ var Commands = []models.BotCommand{
 	{Command: "status", Description: "Show what the bot is doing in this chat"},
 }
 
+// LoginCommand is offered only in the admin chat, where /login works.
+var LoginCommand = models.BotCommand{Command: "login", Description: "Sign the bot in again"}
+
 func parseCommand(text, botUsername string) (name string, forMe, ok bool) {
 	m := commandRe.FindStringSubmatch(text)
 	if m == nil {
@@ -72,6 +75,11 @@ func (h *Handler) commandFunc(name string) func(chatqueue.Key) {
 		return h.newSession
 	case "status":
 		return h.status
+	case "login":
+		if h.Logins == nil {
+			return nil
+		}
+		return h.login
 	default:
 		return nil
 	}

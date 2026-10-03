@@ -85,6 +85,12 @@ func AdminChatID() int64 {
 	return 0
 }
 
+// LoginEmail returns the account email pre-filled on the sign-in page opened by /login
+// (env: NCLAW_LOGIN_EMAIL).
+func LoginEmail() string {
+	return viper.GetString("login_email")
+}
+
 // StartupNotification reports whether the bot should send a startup
 // notification message to whitelisted chats (env: NCLAW_STARTUP_NOTIFICATION).
 // Disabled by default.

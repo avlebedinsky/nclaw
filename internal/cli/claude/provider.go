@@ -4,7 +4,8 @@ import "github.com/nickalie/nclaw/internal/cli"
 
 // Provider implements cli.Provider for the Claude Code CLI backend.
 type Provider struct {
-	execPath string
+	execPath   string
+	loginEmail string
 }
 
 // Compile-time checks: *Provider implements cli.Provider and its optional capabilities.
@@ -13,6 +14,7 @@ var (
 	_ cli.NativeSkillsProvider = (*Provider)(nil)
 	_ cli.SessionStore         = (*Provider)(nil)
 	_ cli.AuthProvider         = (*Provider)(nil)
+	_ cli.LoginProvider        = (*Provider)(nil)
 )
 
 // NewProvider creates a new Claude CLI provider.

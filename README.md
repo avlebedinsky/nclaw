@@ -191,7 +191,7 @@ docker run -d --name nclaw \
 
 Authenticate Claude Code with a long-lived token: run `claude setup-token` once on any machine where Claude Code is installed and pass the printed token as `CLAUDE_CODE_OAUTH_TOKEN`. The token is valid for a year and needs no refresh, so nclaw skips its own token refresh when it is set. The `./claude` volume keeps the agent's conversations, settings and skills across container restarts.
 
-Alternatively, log in inside the container once (`docker exec -it nclaw claude`, then `/login`); the credentials are stored in the `./claude` volume and refreshed automatically. Such a sign-in still ends on a fixed date (about a month after logging in) that refreshing does not move: nclaw warns the admin chat (`NCLAW_ADMIN_CHAT_ID`) 5, 2 and 1 day before it and when it has passed, `/status` shows the date, and a reply that fails because of the sign-in says so. Avoid bind-mounting the live `~/.claude/.credentials.json` of a machine where you also use Claude Code: both sides rotate the same refresh token and one of them gets logged out.
+Alternatively, log in inside the container once (`docker exec -it nclaw claude`, then `/login`); the credentials are stored in the `./claude` volume and refreshed automatically. Such a sign-in still ends on a fixed date (about a month after logging in) that refreshing does not move: nclaw warns the admin chat (`NCLAW_ADMIN_CHAT_ID`) 5, 2 and 1 day before it and when it has passed, `/status` shows the date, and a reply that fails because of the sign-in says so. To renew it, send `/login` in the admin chat: no shell access to the container is needed. Avoid bind-mounting the live `~/.claude/.credentials.json` of a machine where you also use Claude Code: both sides rotate the same refresh token and one of them gets logged out.
 
 ### Multi-Model
 
@@ -612,7 +612,8 @@ NClaw variables use the `NCLAW_` prefix. Provider API keys use the provider's na
 | `NCLAW_MODEL` | No | — | Model for multi-model backend (e.g. `g@gemini-2.5-pro`). Setting this auto-selects multi-model |
 | `NCLAW_COPILOT_MODEL` | No | — | Model for Copilot backend (e.g. `gpt-4.1`). Only used when `NCLAW_CLI=copilot` |
 | `NCLAW_TELEGRAM_WHITELIST_CHAT_IDS` | No | — | Comma-separated list of allowed Telegram chat IDs. If unset, accepts all chats (with a security warning) |
-| `NCLAW_ADMIN_CHAT_ID` | No | first private chat in the whitelist | Chat that receives the bot's own alerts, such as the Claude sign-in about to expire |
+| `NCLAW_ADMIN_CHAT_ID` | No | first private chat in the whitelist | Chat that receives the bot's own alerts, such as the Claude sign-in about to expire. `/login` works only there, and only if it is a private chat |
+| `NCLAW_LOGIN_EMAIL` | No | — | Account email pre-filled on the sign-in page opened by `/login` |
 | `NCLAW_DB_PATH` | No | `{data_dir}/nclaw.db` | Path to the SQLite database |
 | `NCLAW_MAX_SESSION_BYTES` | No | `0` (disabled) | Claude Code session transcript size (bytes) past which nclaw archives the session and starts a fresh conversation for that chat/thread on the next message. Only applies to the `claude`/`claudish` backends |
 | `NCLAW_TIMEZONE` | No | system local | Timezone for the scheduler (e.g. `Europe/Berlin`) |
@@ -656,6 +657,7 @@ webhook:
 | `/stop` | Cancels the current run in this chat (the agent's whole process tree is stopped) and drops queued messages and pending task/webhook runs |
 | `/new` | Starts a new conversation after the current queue: the previous session is archived (Claude/Claudish) or the next run starts without resuming (other backends) |
 | `/status` | Shows what is running and for how long, what is queued, the session size, the backend and when the Claude sign-in expires |
+| `/login` | Admin's private chat only (Claude backend): signs the bot in to Claude again. The bot sends a sign-in link; open it, sign in and send back the code shown at the end |
 
 Commands work while the assistant is busy and are registered in Telegram's command menu. In groups, `/command@yourbot` is supported; commands addressed to other bots are ignored.
 
