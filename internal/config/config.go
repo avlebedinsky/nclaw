@@ -93,6 +93,15 @@ func StreamMessages() bool {
 	return viper.GetBool("stream_messages")
 }
 
+// BundledSkillsDir returns the directory holding the skills shipped with the image
+// (env: NCLAW_BUNDLED_SKILLS_DIR, default /opt/nclaw-skills).
+func BundledSkillsDir() string {
+	if dir := viper.GetString("bundled_skills_dir"); dir != "" {
+		return dir
+	}
+	return "/opt/nclaw-skills"
+}
+
 // DataDir returns the configured data directory path.
 func DataDir() string {
 	return viper.GetString("data_dir")

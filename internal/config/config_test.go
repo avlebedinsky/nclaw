@@ -323,3 +323,12 @@ func TestProgress_DefaultsToEnabled(t *testing.T) {
 	defer viper.Reset()
 	assert.False(t, Progress())
 }
+
+func TestBundledSkillsDir(t *testing.T) {
+	viper.Reset()
+	assert.Equal(t, "/opt/nclaw-skills", BundledSkillsDir())
+
+	viper.Set("bundled_skills_dir", "/srv/skills")
+	defer viper.Reset()
+	assert.Equal(t, "/srv/skills", BundledSkillsDir())
+}

@@ -31,6 +31,7 @@ import (
 	"github.com/nickalie/nclaw/internal/progress"
 	"github.com/nickalie/nclaw/internal/scheduler"
 	"github.com/nickalie/nclaw/internal/sendfile"
+	"github.com/nickalie/nclaw/internal/skills"
 	"github.com/nickalie/nclaw/internal/version"
 	"github.com/nickalie/nclaw/internal/webhook"
 )
@@ -67,6 +68,7 @@ func main() {
 		log.Fatalf("%s cli not found: %v", provider.Name(), err)
 	}
 
+	installBundledSkills()
 	a := setupBot(database, provider)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -167,6 +169,29 @@ func setupBot(database *gorm.DB, provider cli.Provider) *app {
 	webhookSrv := startWebhookServer(webhookMgr)
 
 	return &app{bot: b, handler: h, queue: queue, sched: sched, webhookMgr: webhookMgr, webhookSrv: webhookSrv}
+}
+
+func installBundledSkills() {
+	claudeDir, err := claude.ConfigDir()
+	if err != nil {
+		log.Printf("skills: %v", err)
+		return
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		log.Printf("skills: %v", err)
+		return
+	}
+
+	for _, dest := range skills.Dirs(config.CLI(), claudeDir, home) {
+		installed, err := skills.Install(config.BundledSkillsDir(), dest)
+		if err != nil {
+			log.Printf("skills: %v", err)
+		}
+		if len(installed) > 0 {
+			log.Printf("skills: installed %v into %s", installed, dest)
+		}
+	}
 }
 
 func registerCommands(b *bot.Bot, h *handler.Handler) {
