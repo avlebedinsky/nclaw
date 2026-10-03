@@ -91,17 +91,39 @@ func TestSessionSize_RelativeDir(t *testing.T) {
 	assert.Equal(t, int64(4), size)
 }
 
-func TestArchiveSession_MovesProjectDir(t *testing.T) {
+func TestArchiveSession_MovesHistoryAndKeepsMemory(t *testing.T) {
 	workDir, projectDir := setupProject(t)
 	require.NoError(t, os.WriteFile(filepath.Join(projectDir, "session.jsonl"), []byte("data"), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(projectDir, "session", "subagents"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(projectDir, "memory"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(projectDir, "memory", "MEMORY.md"), []byte("- fact"), 0o644))
 
 	require.NoError(t, ArchiveSession(workDir))
 
-	_, err := os.Stat(projectDir)
-	assert.True(t, os.IsNotExist(err))
 	matches, err := filepath.Glob(projectDir + ".archived-*")
 	require.NoError(t, err)
-	assert.Len(t, matches, 1)
+	require.Len(t, matches, 1)
+	assert.FileExists(t, filepath.Join(matches[0], "session.jsonl"))
+	assert.DirExists(t, filepath.Join(matches[0], "session", "subagents"))
+	assert.NoDirExists(t, filepath.Join(matches[0], "memory"))
+
+	memory, err := os.ReadFile(filepath.Join(projectDir, "memory", "MEMORY.md"))
+	require.NoError(t, err)
+	assert.Equal(t, "- fact", string(memory))
+	_, found := SessionSize(workDir)
+	assert.False(t, found)
+}
+
+func TestArchiveSession_OnlyMemoryCreatesNoArchive(t *testing.T) {
+	workDir, projectDir := setupProject(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(projectDir, "memory"), 0o755))
+
+	require.NoError(t, ArchiveSession(workDir))
+
+	matches, err := filepath.Glob(projectDir + ".archived-*")
+	require.NoError(t, err)
+	assert.Empty(t, matches)
+	assert.DirExists(t, filepath.Join(projectDir, "memory"))
 }
 
 func TestArchiveSession_NoOpWhenMissing(t *testing.T) {
@@ -111,6 +133,7 @@ func TestArchiveSession_NoOpWhenMissing(t *testing.T) {
 
 func TestArchiveSession_KeepsNewestArchives(t *testing.T) {
 	workDir, projectDir := setupProject(t)
+	require.NoError(t, os.WriteFile(filepath.Join(projectDir, "session.jsonl"), []byte("data"), 0o644))
 	for _, stamp := range []int64{1700000001, 1700000002, 1700000003, 1700000004} {
 		require.NoError(t, os.MkdirAll(fmt.Sprintf("%s.archived-%d", projectDir, stamp), 0o755))
 	}

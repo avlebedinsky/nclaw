@@ -659,7 +659,7 @@ webhook:
 | Command | What it does |
 |---|---|
 | `/stop` | Cancels the current run in this chat (the agent's whole process tree is stopped) and drops queued messages and pending task/webhook runs |
-| `/new` | Starts a new conversation after the current queue: the previous session is archived (Claude/Claudish) or the next run starts without resuming (other backends) |
+| `/new` | Starts a new conversation after the current queue: the previous session is archived (Claude/Claudish; the agent's auto memory for the chat is kept) or the next run starts without resuming (other backends) |
 | `/status` | Shows what is running and for how long, what is queued, the session size, the backend and when the Claude sign-in expires |
 | `/login` | Admin's private chat only (Claude backend): signs the bot in to Claude again. The bot sends a sign-in link; open it, sign in and send back the code shown at the end |
 
