@@ -1,19 +1,26 @@
 package claude
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/nickalie/go-binwrapper"
 	"github.com/nickalie/nclaw/internal/cli"
+	"github.com/nickalie/nclaw/internal/cli/procrun"
 	"github.com/nickalie/nclaw/internal/cli/streamjson"
 )
 
-// Compile-time check: *Claude implements cli.Client.
-var _ cli.Client = (*Claude)(nil)
+// Compile-time checks: *Claude implements cli.Client and its optional interfaces.
+var (
+	_ cli.Client          = (*Claude)(nil)
+	_ cli.StreamingClient = (*Claude)(nil)
+	_ cli.EphemeralClient = (*Claude)(nil)
+	_ cli.ProgressClient  = (*Claude)(nil)
+)
 
 // outputFormat represents the output format for the CLI.
 type outputFormat string
@@ -23,7 +30,8 @@ const formatStreamJSON outputFormat = "stream-json"
 
 // Claude wraps the Claude Code CLI binary.
 type Claude struct {
-	bin             *binwrapper.BinWrapper
+	bin             *procrun.Cmd
+	ctx             context.Context
 	model           string
 	fallbackModel   string
 	outputFormat    outputFormat
@@ -41,6 +49,8 @@ type Claude struct {
 	addDirs         []string
 	env             []string
 	stdIn           io.Reader
+	onMessage       cli.MessageHandler
+	onTool          cli.ToolHandler
 	skipPermissions bool
 	noPersistence   bool
 	verbose         bool
@@ -48,11 +58,21 @@ type Claude struct {
 
 // New creates a new Claude CLI wrapper.
 func New() *Claude {
-	bin := binwrapper.NewBinWrapper().
+	bin := procrun.New().
 		ExecPath("claude").
 		AutoExe()
 
 	return &Claude{bin: bin}
+}
+
+// ExecPath sets the full path to the claude binary.
+func (c *Claude) ExecPath(path string) *Claude {
+	if path == "" {
+		return c
+	}
+
+	c.bin.Dest(filepath.Dir(path)).ExecPath(filepath.Base(path))
+	return c
 }
 
 // BinPath sets the directory containing the claude binary.
@@ -152,6 +172,39 @@ func (c *Claude) SkipPermissions() cli.Client {
 	return c
 }
 
+// Context sets the context that cancels the run.
+func (c *Claude) Context(ctx context.Context) cli.Client {
+	c.ctx = ctx
+	return c
+}
+
+func (c *Claude) runCtx() context.Context {
+	if c.ctx == nil {
+		return context.Background()
+	}
+	return c.ctx
+}
+
+// OnToolUse registers a callback invoked for each tool call as it streams from the CLI.
+// Implements cli.ProgressClient.
+func (c *Claude) OnToolUse(handler cli.ToolHandler) cli.Client {
+	c.onTool = handler
+	return c
+}
+
+// OnMessage registers a callback invoked for each assistant message as it
+// streams from the CLI, enabling real-time delivery. Implements cli.StreamingClient.
+func (c *Claude) OnMessage(handler cli.MessageHandler) cli.Client {
+	c.onMessage = handler
+	return c
+}
+
+// Ephemeral disables session persistence for this run. Implements cli.EphemeralClient.
+func (c *Claude) Ephemeral() cli.Client {
+	c.noPersistence = true
+	return c
+}
+
 // NoSessionPersistence disables session persistence so sessions are not saved to disk.
 func (c *Claude) NoSessionPersistence() *Claude {
 	c.noPersistence = true
@@ -211,23 +264,50 @@ func (c *Claude) Resume(session, query string) (*cli.Result, error) {
 
 // runAndParse executes the CLI and parses stream-json output into a Result.
 func (c *Claude) runAndParse(query string) (*cli.Result, error) {
-	if err := c.bin.Run(query); err != nil {
-		result := streamjson.ParseOutput(c.bin.StdOut())
+	result, raw, runErr := c.run(query)
+	if runErr != nil {
 		if result.Text == "" && result.FullText == "" {
-			text := strings.TrimSpace(string(c.bin.CombinedOutput()))
+			text := strings.TrimSpace(string(combined(raw, c.bin.StdErr())))
 			result = &cli.Result{Text: text, FullText: text}
 		}
-		return result, fmt.Errorf("claude: %w", err)
+		return result, fmt.Errorf("claude: %w", runErr)
 	}
 
-	return streamjson.ParseOutput(c.bin.StdOut()), nil
+	return result, nil
+}
+
+// run executes the CLI and returns the parsed result plus raw stdout (for error
+// fallback). With an OnMessage handler, stdout is parsed incrementally and each
+// assistant message is delivered live; otherwise output is captured and parsed
+// at the end.
+func (c *Claude) run(query string) (*cli.Result, []byte, error) {
+	if c.onMessage == nil && c.onTool == nil {
+		err := c.bin.Run(c.runCtx(), query)
+		stdout := c.bin.StdOut()
+		return streamjson.ParseOutput(stdout), stdout, err
+	}
+
+	w := streamjson.NewStreamWriter(c.onMessage).WithToolHandler(c.onTool)
+	c.bin.SetStdOut(w)
+	err := c.bin.Run(c.runCtx(), query)
+	return w.Result(), w.Bytes(), err
+}
+
+// combined concatenates stdout and stderr for error fallback output.
+func combined(stdout, stderr []byte) []byte {
+	out := make([]byte, 0, len(stdout)+len(stderr))
+	out = append(out, stdout...)
+	return append(out, stderr...)
 }
 
 // Version returns the Claude CLI version string.
 func (c *Claude) Version() (string, error) {
 	c.bin.Reset()
 
-	if err := c.bin.Run("--version"); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), cli.VersionTimeout)
+	defer cancel()
+
+	if err := c.bin.Run(ctx, "--version"); err != nil {
 		return strings.TrimSpace(string(c.bin.CombinedOutput())), fmt.Errorf("claude: %w", err)
 	}
 
@@ -249,7 +329,7 @@ func (c *Claude) CombinedOutput() []byte {
 	return c.bin.CombinedOutput()
 }
 
-// prepare resets the binwrapper and rebuilds all arguments from stored configuration.
+// prepare resets the command and rebuilds all arguments from stored configuration.
 func (c *Claude) prepare(extra ...string) {
 	c.bin.Reset()
 

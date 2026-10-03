@@ -8,12 +8,15 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
 	"gorm.io/gorm"
 
+	"github.com/nickalie/nclaw/internal/chatqueue"
 	"github.com/nickalie/nclaw/internal/cli"
 	"github.com/nickalie/nclaw/internal/cli/claude"
 	"github.com/nickalie/nclaw/internal/cli/claudish"
@@ -23,10 +26,13 @@ import (
 	"github.com/nickalie/nclaw/internal/config"
 	"github.com/nickalie/nclaw/internal/db"
 	"github.com/nickalie/nclaw/internal/handler"
+	"github.com/nickalie/nclaw/internal/invoker"
 	"github.com/nickalie/nclaw/internal/pipeline"
+	"github.com/nickalie/nclaw/internal/progress"
 	"github.com/nickalie/nclaw/internal/scheduler"
 	"github.com/nickalie/nclaw/internal/sendfile"
-	"github.com/nickalie/nclaw/internal/telegram"
+	"github.com/nickalie/nclaw/internal/skills"
+	"github.com/nickalie/nclaw/internal/transcribe"
 	"github.com/nickalie/nclaw/internal/version"
 	"github.com/nickalie/nclaw/internal/webhook"
 )
@@ -63,42 +69,92 @@ func main() {
 		log.Fatalf("%s cli not found: %v", provider.Name(), err)
 	}
 
-	b, sched, webhookMgr, webhookSrv := setupBot(database, provider)
+	installBundledSkills()
+	a := setupBot(database, provider)
 
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer cancel()
-	defer sched.Shutdown()
-	defer shutdownWebhook(webhookSrv, webhookMgr)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	log.Printf("nclaw bot started (%s, %s: %s)", version.String(), provider.Name(), cliVer)
-	sendStartupNotifications(b)
-	b.Start(ctx)
+	sendStartupNotifications(a.bot)
+	a.bot.Start(ctx)
+	stop()
+
+	log.Println("nclaw: shutting down")
+	a.shutdown(shutdownTimeout)
+	log.Println("nclaw: stopped")
 }
 
-func setupBot(database *gorm.DB, provider cli.Provider) (*bot.Bot, *scheduler.Scheduler, *webhook.Manager, *webhook.Server) {
-	chatLocker := telegram.NewChatLocker()
-	h := &handler.Handler{Provider: provider, ChatLocker: chatLocker}
+const shutdownTimeout = 20 * time.Second
+
+type app struct {
+	bot        *bot.Bot
+	handler    *handler.Handler
+	queue      *chatqueue.Queue[handler.Inbound]
+	sched      *scheduler.Scheduler
+	webhookMgr *webhook.Manager
+	webhookSrv *webhook.Server
+}
+
+func (a *app) shutdown(timeout time.Duration) {
+	if a.webhookSrv != nil {
+		if err := a.webhookSrv.Shutdown(); err != nil {
+			log.Printf("webhook shutdown: %v", err)
+		}
+	}
+
+	a.handler.NotifyShutdown(a.queue.Close())
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if err := a.queue.Wait(ctx); err != nil {
+		log.Printf("nclaw: running work did not finish: %v", err)
+	}
+
+	if err := a.sched.Shutdown(); err != nil {
+		log.Printf("scheduler shutdown: %v", err)
+	}
+	if a.webhookMgr != nil {
+		a.webhookMgr.Wait()
+	}
+}
+
+func setupBot(database *gorm.DB, provider cli.Provider) *app {
+	loc := config.Location()
+	inv := invoker.New(provider, invokerOptions(loc, func(chatID int64, threadID int) string {
+		return scheduler.FormatTaskList(database, loc, chatID, threadID)
+	}))
+	h := &handler.Handler{Invoker: inv}
+	queue := chatqueue.New(h.RunBatch, chatqueue.Options{})
+	h.Queue = queue
 
 	b, err := bot.New(config.TelegramBotToken(),
+		bot.WithNotAsyncHandlers(),
+		bot.WithMiddlewares(handler.AllowChat),
 		bot.WithDefaultHandler(h.Default),
 		bot.WithHTTPClient(time.Minute, &http.Client{Timeout: 5 * time.Minute}),
 	)
 	if err != nil {
 		log.Fatal(err)
 	}
+	h.Bot = b
+	h.Send = newPipelineSendFunc(b)
+	if config.Progress() {
+		h.Progress = progress.NewBotAPI(b)
+	}
+	h.Transcriber = newTranscriber()
+	registerCommands(b, h)
 
 	fileSenders := sendfile.Senders{
 		Doc:   newSendDocFunc(b),
 		Audio: newSendAudioFunc(b),
 	}
-	sched, err := scheduler.New(database, provider, config.Timezone(), config.DataDir(), chatLocker)
+	sched, err := scheduler.New(database, inv, queue, loc)
 	if err != nil {
 		log.Fatal("scheduler: ", err)
 	}
 
-	h.Scheduler = sched
-
-	webhookMgr := createWebhookManager(database, provider, chatLocker)
+	webhookMgr := createWebhookManager(database, inv, queue)
 	p := buildPipeline(b, fileSenders, sched, webhookMgr)
 	h.Pipeline = p
 	sched.SetPipeline(p)
@@ -114,7 +170,74 @@ func setupBot(database *gorm.DB, provider cli.Provider) (*bot.Bot, *scheduler.Sc
 	// Start webhook HTTP server after pipeline is wired and scheduler is loaded.
 	webhookSrv := startWebhookServer(webhookMgr)
 
-	return b, sched, webhookMgr, webhookSrv
+	return &app{bot: b, handler: h, queue: queue, sched: sched, webhookMgr: webhookMgr, webhookSrv: webhookSrv}
+}
+
+func newTranscriber() handler.Transcriber {
+	t, err := transcribe.New(&transcribe.Config{
+		WhisperBin: config.WhisperBin(),
+		FFmpegBin:  "ffmpeg",
+		Model:      config.WhisperModel(),
+		Language:   config.WhisperLanguage(),
+	})
+	if err != nil {
+		log.Printf("transcribe: voice transcription disabled: %v", err)
+		return nil
+	}
+	log.Printf("transcribe: enabled (model=%s, language=%s)", config.WhisperModel(), config.WhisperLanguage())
+	return t
+}
+
+func installBundledSkills() {
+	claudeDir, err := claude.ConfigDir()
+	if err != nil {
+		log.Printf("skills: %v", err)
+		return
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		log.Printf("skills: %v", err)
+		return
+	}
+
+	for _, dest := range skills.Dirs(config.CLI(), claudeDir, home) {
+		installed, err := skills.Install(config.BundledSkillsDir(), dest)
+		if err != nil {
+			log.Printf("skills: %v", err)
+		}
+		if len(installed) > 0 {
+			log.Printf("skills: installed %v into %s", installed, dest)
+		}
+	}
+}
+
+func registerCommands(b *bot.Bot, h *handler.Handler) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	if me, err := b.GetMe(ctx); err != nil {
+		log.Printf("telegram: getMe: %v", err)
+	} else {
+		h.BotUsername = me.Username
+	}
+	b.RegisterHandlerMatchFunc(h.MatchCommand, h.Command)
+	if _, err := b.SetMyCommands(ctx, &bot.SetMyCommandsParams{Commands: handler.Commands}); err != nil {
+		log.Printf("telegram: setMyCommands: %v", err)
+	}
+}
+
+func invokerOptions(loc *time.Location, taskList invoker.TaskListFunc) invoker.Options {
+	opts := invoker.Options{
+		DataDir:         config.DataDir(),
+		MaxSessionBytes: config.MaxSessionBytes(),
+		Location:        loc,
+		TaskList:        taskList,
+		Timeout:         config.CLITimeout(),
+	}
+	if dir, err := claude.ConfigDir(); err == nil {
+		opts.SkillsDir = filepath.Join(dir, "skills")
+	}
+	return opts
 }
 
 func buildPipeline(
@@ -126,7 +249,10 @@ func buildPipeline(
 		executors = append(executors, webhookMgr)
 	}
 	fileSenders.MediaGroup = newSendMediaGroupFunc(b)
-	return pipeline.New(newPipelineSendFunc(b), fileSenders, webhookMgr != nil, executors...)
+	p := pipeline.New(newPipelineSendFunc(b), fileSenders, webhookMgr != nil, executors...)
+	p.SetStreamMessages(config.StreamMessages())
+	p.SetDataDir(config.DataDir())
+	return p
 }
 
 func hasFlag(flags ...string) bool {
@@ -142,8 +268,7 @@ func hasFlag(flags ...string) bool {
 
 func printVersion() error {
 	fmt.Printf("nclaw %s\n", version.String())
-	// Best-effort: show CLI version if config is available.
-	_ = config.Init()
+	config.Init() //nolint:errcheck // best-effort: show CLI version if config is available
 	provider, err := newProvider(config.CLI())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "cli: %v\n", err)
@@ -161,7 +286,7 @@ func printVersion() error {
 func newProvider(backend string) (cli.Provider, error) {
 	switch backend {
 	case "claude":
-		return claude.NewProvider(), nil
+		return claude.NewProvider(config.ClaudeExecPath()), nil
 	case "claudish":
 		return claudish.NewProvider(
 			config.Model(), config.ModelOpus(), config.ModelSonnet(), config.ModelHaiku(), config.ModelSubagent(),
@@ -178,6 +303,10 @@ func newProvider(backend string) (cli.Provider, error) {
 }
 
 func sendStartupNotifications(b *bot.Bot) {
+	if !config.StartupNotification() {
+		return
+	}
+
 	chatIDs := config.WhitelistChatIDs()
 	if len(chatIDs) == 0 {
 		return
@@ -275,12 +404,12 @@ func newPipelineSendFunc(b *bot.Bot) pipeline.SendFunc {
 	}
 }
 
-func createWebhookManager(database *gorm.DB, provider cli.Provider, chatLocker *telegram.ChatLocker) *webhook.Manager {
+func createWebhookManager(database *gorm.DB, inv *invoker.Invoker, runner webhook.Runner) *webhook.Manager {
 	domain := config.WebhookBaseDomain()
 	if domain == "" {
 		return nil
 	}
-	return webhook.NewManager(database, provider, domain, config.DataDir(), chatLocker)
+	return webhook.NewManager(database, inv, runner, domain)
 }
 
 func startWebhookServer(mgr *webhook.Manager) *webhook.Server {
@@ -312,15 +441,4 @@ func startWebhookServer(mgr *webhook.Manager) *webhook.Server {
 	}()
 
 	return srv
-}
-
-func shutdownWebhook(srv *webhook.Server, mgr *webhook.Manager) {
-	if srv != nil {
-		if err := srv.Shutdown(); err != nil {
-			log.Printf("webhook shutdown: %v", err)
-		}
-	}
-	if mgr != nil {
-		mgr.Wait()
-	}
 }

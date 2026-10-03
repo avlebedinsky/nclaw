@@ -1,6 +1,7 @@
 package cli_test
 
 import (
+	"context"
 	"testing"
 
 	"github.com/nickalie/nclaw/internal/cli"
@@ -21,6 +22,7 @@ func (m *mockClient) Dir(dir string) cli.Client {
 	return m
 }
 
+func (m *mockClient) Context(context.Context) cli.Client { return m }
 func (m *mockClient) SkipPermissions() cli.Client {
 	m.skipPerms = true
 	return m

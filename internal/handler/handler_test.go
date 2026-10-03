@@ -1,13 +1,17 @@
 package handler
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,15 +20,12 @@ import (
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
 
+	"github.com/nickalie/nclaw/internal/chatqueue"
 	"github.com/nickalie/nclaw/internal/cli"
 	"github.com/nickalie/nclaw/internal/config"
-	"github.com/nickalie/nclaw/internal/model"
+	"github.com/nickalie/nclaw/internal/invoker"
 	"github.com/nickalie/nclaw/internal/pipeline"
-	"github.com/nickalie/nclaw/internal/scheduler"
 	"github.com/nickalie/nclaw/internal/sendfile"
 	"github.com/nickalie/nclaw/internal/telegram"
 )
@@ -365,7 +366,7 @@ func TestMessageContent_CaptionWithoutAttachment(t *testing.T) {
 }
 
 func TestBuildPrompt_NoAttachment(t *testing.T) {
-	result := buildPrompt(context.TODO(), nil, "just text", nil, "/tmp")
+	result := (&Handler{}).buildPrompt(context.TODO(), "just text", nil, "/tmp")
 	assert.Equal(t, "just text", result)
 }
 
@@ -505,7 +506,7 @@ func TestEnsureDir_AlreadyExists(t *testing.T) {
 
 func TestBuildPrompt_WithAttachment(t *testing.T) {
 	// When attachment is nil, buildPrompt should return plain text unchanged.
-	result := buildPrompt(context.TODO(), nil, "some text", nil, t.TempDir())
+	result := (&Handler{}).buildPrompt(context.TODO(), "some text", nil, t.TempDir())
 	assert.Equal(t, "some text", result)
 }
 
@@ -560,6 +561,7 @@ type mockClient struct {
 }
 
 func (m *mockClient) Dir(dir string) cli.Client              { m.dir = dir; return m }
+func (m *mockClient) Context(context.Context) cli.Client     { return m }
 func (m *mockClient) SkipPermissions() cli.Client            { m.skipPerms = true; return m }
 func (m *mockClient) AppendSystemPrompt(p string) cli.Client { m.systemPrompt = p; return m }
 func (m *mockClient) Ask(query string) (*cli.Result, error) {
@@ -605,57 +607,73 @@ func newTestBot(t *testing.T) *bot.Bot {
 	return b
 }
 
-// setupTestScheduler creates a minimal scheduler backed by an in-memory DB.
-func setupTestScheduler(t *testing.T) *scheduler.Scheduler {
+func newTestHandler(t *testing.T, provider cli.Provider, send pipeline.SendFunc) *Handler {
 	t.Helper()
-	database, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Silent),
-	})
-	require.NoError(t, err)
-	require.NoError(t, database.AutoMigrate(&model.ScheduledTask{}, &model.TaskRunLog{}))
+	inv := invoker.New(provider, invoker.Options{DataDir: t.TempDir()})
+	h := &Handler{Invoker: inv, Pipeline: pipeline.New(send, sendfile.Senders{}, false), Bot: newTestBot(t)}
+	h.Queue = chatqueue.New(h.RunBatch, chatqueue.Options{})
+	return h
+}
 
-	sched, err := scheduler.New(database, &mockProvider{client: &mockClient{}}, "UTC", t.TempDir(), telegram.NewChatLocker())
-	require.NoError(t, err)
-	return sched
+func waitQueue(t *testing.T, h *Handler) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	require.NoError(t, h.Queue.Wait(ctx))
+}
+
+func recordSend(sent *[]string) pipeline.SendFunc {
+	return func(_ context.Context, _ int64, _ int, text, _ string) error {
+		*sent = append(*sent, text)
+		return nil
+	}
 }
 
 // --- Default tests ---
 
 func TestDefault_NilMessage(t *testing.T) {
-	h := &Handler{
-		Provider:   &mockProvider{client: &mockClient{}},
-		ChatLocker: telegram.NewChatLocker(),
-	}
+	h := &Handler{}
 	update := &models.Update{Message: nil}
 	// Should return immediately without panic.
 	h.Default(context.Background(), newTestBot(t), update)
 }
 
-func TestDefault_NonWhitelisted(t *testing.T) {
+func TestAllowChat(t *testing.T) {
 	viper.Set("telegram.whitelist_chat_ids", "111,222")
 	defer viper.Reset()
 
-	h := &Handler{
-		Provider:   &mockProvider{client: &mockClient{}},
-		ChatLocker: telegram.NewChatLocker(),
+	var passed []int64
+	next := AllowChat(func(_ context.Context, _ *bot.Bot, u *models.Update) { passed = append(passed, u.Message.Chat.ID) })
+	for _, u := range []*models.Update{
+		{Message: &models.Message{Text: "hi", Chat: models.Chat{ID: 999}}},
+		{Message: &models.Message{Text: "hi", Chat: models.Chat{ID: 111}}},
+		{},
+	} {
+		next(context.Background(), nil, u)
 	}
-	update := &models.Update{
-		Message: &models.Message{
-			Text: "hello",
-			Chat: models.Chat{ID: 999},
-		},
+
+	assert.Equal(t, []int64{111}, passed)
+}
+
+func TestDefault_BurstIsAnsweredOnce(t *testing.T) {
+	client := &mockClient{contResult: &cli.Result{Text: "both done", FullText: "both done"}}
+	var sent []string
+	h := newTestHandler(t, &mockProvider{client: client}, recordSend(&sent))
+
+	for _, text := range []string{"first", "second"} {
+		h.Default(context.Background(), nil, &models.Update{Message: &models.Message{Text: text, Chat: models.Chat{ID: 100}}})
 	}
-	// Should return without spawning goroutine (non-whitelisted).
-	h.Default(context.Background(), newTestBot(t), update)
+	waitQueue(t, h)
+
+	assert.Equal(t, []string{"both done"}, sent)
+	assert.Contains(t, client.lastQuery, "--- Message 1 ---\nfirst")
+	assert.Contains(t, client.lastQuery, "--- Message 2 ---\nsecond")
 }
 
 func TestDefault_EmptyMessage(t *testing.T) {
 	viper.Reset()
 
-	h := &Handler{
-		Provider:   &mockProvider{client: &mockClient{}},
-		ChatLocker: telegram.NewChatLocker(),
-	}
+	h := &Handler{}
 	update := &models.Update{
 		Message: &models.Message{
 			Chat: models.Chat{ID: 100},
@@ -663,128 +681,6 @@ func TestDefault_EmptyMessage(t *testing.T) {
 	}
 	// Empty message (no text, no attachment) should return early.
 	h.Default(context.Background(), newTestBot(t), update)
-}
-
-// --- callCLI tests ---
-
-func TestCallCLI_Success(t *testing.T) {
-	viper.Set("data_dir", t.TempDir())
-	defer viper.Reset()
-
-	client := &mockClient{
-		contResult: &cli.Result{Text: "response text", FullText: "response text"},
-	}
-	provider := &mockProvider{client: client, name: "test-cli"}
-	sched := setupTestScheduler(t)
-
-	h := &Handler{
-		Provider:   provider,
-		Scheduler:  sched,
-		ChatLocker: telegram.NewChatLocker(),
-	}
-
-	result, err := h.callCLI(t.TempDir(), "hello prompt", 100, 0)
-	assert.NoError(t, err)
-	assert.NotNil(t, result)
-	assert.Equal(t, "response text", result.Text)
-	assert.Equal(t, "hello prompt", client.lastQuery)
-	assert.True(t, client.skipPerms, "SkipPermissions should be called")
-	assert.Contains(t, client.systemPrompt, "Telegram")
-}
-
-func TestCallCLI_Error(t *testing.T) {
-	viper.Set("data_dir", t.TempDir())
-	defer viper.Reset()
-
-	client := &mockClient{
-		contResult: nil,
-		contErr:    fmt.Errorf("cli failed"),
-	}
-	provider := &mockProvider{client: client, name: "test-cli"}
-	sched := setupTestScheduler(t)
-
-	h := &Handler{
-		Provider:   provider,
-		Scheduler:  sched,
-		ChatLocker: telegram.NewChatLocker(),
-	}
-
-	result, err := h.callCLI(t.TempDir(), "hello", 100, 0)
-	assert.Error(t, err)
-	assert.NotNil(t, result)
-	assert.Contains(t, result.Text, "error: cli failed")
-}
-
-func TestCallCLI_ErrorWithPartialResult(t *testing.T) {
-	viper.Set("data_dir", t.TempDir())
-	defer viper.Reset()
-
-	client := &mockClient{
-		contResult: &cli.Result{Text: "partial output", FullText: "partial output"},
-		contErr:    fmt.Errorf("timeout"),
-	}
-	provider := &mockProvider{client: client, name: "test-cli"}
-	sched := setupTestScheduler(t)
-
-	h := &Handler{
-		Provider:   provider,
-		Scheduler:  sched,
-		ChatLocker: telegram.NewChatLocker(),
-	}
-
-	result, err := h.callCLI(t.TempDir(), "hello", 100, 0)
-	assert.Error(t, err)
-	assert.NotNil(t, result)
-	// When result has text, it should keep the partial output, not replace with error.
-	assert.Equal(t, "partial output", result.Text)
-}
-
-func TestCallCLI_PreInvokeError(t *testing.T) {
-	viper.Set("data_dir", t.TempDir())
-	defer viper.Reset()
-
-	client := &mockClient{
-		contResult: &cli.Result{Text: "ok", FullText: "ok"},
-	}
-	provider := &mockProvider{
-		client:       client,
-		name:         "test-cli",
-		preInvokeErr: fmt.Errorf("token refresh failed"),
-	}
-	sched := setupTestScheduler(t)
-
-	h := &Handler{
-		Provider:   provider,
-		Scheduler:  sched,
-		ChatLocker: telegram.NewChatLocker(),
-	}
-
-	// PreInvoke error should be logged as warning but not block the CLI call.
-	result, err := h.callCLI(t.TempDir(), "hello", 100, 0)
-	assert.NoError(t, err)
-	assert.Equal(t, "ok", result.Text)
-}
-
-func TestCallCLI_SystemPromptIncludesTaskList(t *testing.T) {
-	viper.Set("data_dir", t.TempDir())
-	defer viper.Reset()
-
-	client := &mockClient{
-		contResult: &cli.Result{Text: "done", FullText: "done"},
-	}
-	provider := &mockProvider{client: client, name: "test-cli"}
-	sched := setupTestScheduler(t)
-
-	h := &Handler{
-		Provider:   provider,
-		Scheduler:  sched,
-		ChatLocker: telegram.NewChatLocker(),
-	}
-
-	_, _ = h.callCLI(t.TempDir(), "test", 100, 0)
-	// System prompt should include both the Telegram formatting prompt and task list.
-	assert.Contains(t, client.systemPrompt, telegram.Prompt)
-	assert.Contains(t, client.systemPrompt, "Current scheduled tasks:")
 }
 
 // --- buildPrompt tests ---
@@ -805,7 +701,7 @@ func TestBuildPrompt_WithDownloadError(t *testing.T) {
 	require.NoError(t, err)
 
 	att := &attachment{fileID: "f1", filename: "test.pdf"}
-	result := buildPrompt(context.Background(), b, "analyze this", att, t.TempDir())
+	result := (&Handler{Bot: b}).buildPrompt(context.Background(), "analyze this", att, t.TempDir())
 	// Should contain original text plus error message.
 	assert.Contains(t, result, "analyze this")
 	assert.Contains(t, result, "file attachment failed to download")
@@ -833,7 +729,7 @@ func TestBuildPrompt_WithSuccessfulDownload(t *testing.T) {
 
 	dir := t.TempDir()
 	att := &attachment{fileID: "f1", filename: "test.pdf"}
-	result := buildPrompt(context.Background(), b, "analyze this", att, dir)
+	result := (&Handler{Bot: b}).buildPrompt(context.Background(), "analyze this", att, dir)
 	assert.Contains(t, result, "I'm sending you a file: test.pdf")
 	assert.Contains(t, result, "analyze this")
 
@@ -862,79 +758,114 @@ func TestBuildPrompt_WithAttachmentNoText(t *testing.T) {
 	require.NoError(t, err)
 
 	att := &attachment{fileID: "f1", filename: "photo.jpg"}
-	result := buildPrompt(context.Background(), b, "", att, t.TempDir())
+	result := (&Handler{Bot: b}).buildPrompt(context.Background(), "", att, t.TempDir())
 	assert.Contains(t, result, "I'm sending you a file: photo.jpg")
 	// No trailing user text appended.
 	assert.NotContains(t, result, "\n\n\n")
 }
 
-// --- processMessage tests ---
+// --- RunBatch tests ---
 
-func TestProcessMessage_Success(t *testing.T) {
-	viper.Set("data_dir", t.TempDir())
-	defer viper.Reset()
+var testKey = chatqueue.Key{ChatID: 100}
 
-	var sentText string
-	sendFn := func(_ context.Context, chatID int64, threadID int, text, parseMode string) error {
-		sentText = text
-		return nil
-	}
+func TestRunBatch_Success(t *testing.T) {
+	client := &mockClient{contResult: &cli.Result{Text: "cli response", FullText: "cli response"}}
+	var sent []string
+	h := newTestHandler(t, &mockProvider{client: client}, recordSend(&sent))
 
-	client := &mockClient{
-		contResult: &cli.Result{Text: "cli response", FullText: "cli response"},
-	}
-	provider := &mockProvider{client: client, name: "test-cli"}
-	sched := setupTestScheduler(t)
-	pipe := pipeline.New(sendFn, sendfile.Senders{}, false)
+	h.RunBatch(context.Background(), testKey, []Inbound{{text: "hello"}})
 
-	h := &Handler{
-		Provider:   provider,
-		Scheduler:  sched,
-		Pipeline:   pipe,
-		ChatLocker: telegram.NewChatLocker(),
-	}
-
-	msg := &models.Message{
-		Text: "hello",
-		Chat: models.Chat{ID: 100},
-	}
-
-	h.processMessage(context.Background(), newTestBot(t), msg, "hello", nil)
-	assert.Equal(t, "cli response", sentText)
+	assert.Equal(t, []string{"cli response"}, sent)
+	assert.True(t, strings.HasSuffix(client.lastQuery, "\n\nhello"))
+	assert.Equal(t, h.Invoker.ChatDir(100, 0), client.dir)
+	assert.Contains(t, client.systemPrompt, telegram.Prompt)
 }
 
-func TestProcessMessage_CLIError(t *testing.T) {
-	viper.Set("data_dir", t.TempDir())
-	defer viper.Reset()
+func TestRunBatch_CLIError(t *testing.T) {
+	client := &mockClient{contErr: fmt.Errorf("boom")}
+	var sent []string
+	h := newTestHandler(t, &mockProvider{client: client}, recordSend(&sent))
 
-	var sentText string
-	sendFn := func(_ context.Context, chatID int64, threadID int, text, parseMode string) error {
-		sentText = text
-		return nil
+	h.RunBatch(context.Background(), testKey, []Inbound{{text: "hello"}})
+
+	require.Len(t, sent, 1)
+	assert.Contains(t, sent[0], "error: boom")
+}
+
+func TestRunBatch_CLIErrorKeepsPartialOutput(t *testing.T) {
+	client := &mockClient{contResult: &cli.Result{Text: "partial output", FullText: "partial output"}, contErr: fmt.Errorf("timeout")}
+	var sent []string
+	h := newTestHandler(t, &mockProvider{client: client}, recordSend(&sent))
+
+	h.RunBatch(context.Background(), testKey, []Inbound{{text: "hello"}})
+
+	assert.Equal(t, []string{"partial output"}, sent)
+}
+
+func TestRunBatch_StoppedRunSendsNothing(t *testing.T) {
+	for _, cause := range []error{chatqueue.ErrStopped, chatqueue.ErrShuttingDown} {
+		client := &mockClient{contResult: &cli.Result{Text: "half"}, contErr: fmt.Errorf("claude: %w", cause)}
+		var sent []string
+		h := newTestHandler(t, &mockProvider{client: client}, recordSend(&sent))
+
+		h.RunBatch(context.Background(), testKey, []Inbound{{text: "hello"}})
+
+		assert.Empty(t, sent, cause.Error())
 	}
+}
 
-	client := &mockClient{
-		contResult: nil,
-		contErr:    fmt.Errorf("boom"),
-	}
-	provider := &mockProvider{client: client, name: "test-cli"}
-	sched := setupTestScheduler(t)
-	pipe := pipeline.New(sendFn, sendfile.Senders{}, false)
+func TestNewInbound_IncludesReplyContext(t *testing.T) {
+	msg := &models.Message{Text: "and this?", Chat: models.Chat{ID: 100}, ReplyToMessage: &models.Message{Text: "earlier"}, MediaGroupID: "g1"}
 
-	h := &Handler{
-		Provider:   provider,
-		Scheduler:  sched,
-		Pipeline:   pipe,
-		ChatLocker: telegram.NewChatLocker(),
-	}
+	in, ok := newInbound(msg)
 
-	msg := &models.Message{
-		Text: "hello",
-		Chat: models.Chat{ID: 100},
-	}
+	require.True(t, ok)
+	assert.Equal(t, "[Replying to message: earlier]\n\nand this?", in.text)
+	assert.Equal(t, "g1", in.mediaGroup)
+	_, ok = newInbound(&models.Message{Chat: models.Chat{ID: 1}})
+	assert.False(t, ok)
+}
 
-	h.processMessage(context.Background(), newTestBot(t), msg, "hello", nil)
-	assert.Contains(t, sentText, "error: boom")
+func TestSettleFor(t *testing.T) {
+	assert.Equal(t, messageSettle, settleFor(&models.Message{}))
+	assert.Equal(t, albumSettle, settleFor(&models.Message{MediaGroupID: "g"}))
+}
+
+func TestComposePrompt_SingleMessageUnchanged(t *testing.T) {
+	assert.Equal(t, "hello", (&Handler{}).composePrompt(context.Background(), t.TempDir(), []Inbound{{text: "hello"}}))
+}
+
+func TestComposePrompt_AlbumWithCaptionAndFollowUp(t *testing.T) {
+	srv := newFileServer(t, map[string]string{"f1": "one", "f2": "two"})
+	b, err := bot.New("123:SECRET", bot.WithServerURL(srv.URL), bot.WithSkipGetMe())
+	require.NoError(t, err)
+	dir := t.TempDir()
+
+	prompt := (&Handler{Bot: b}).composePrompt(context.Background(), dir, []Inbound{
+		{text: "what is on these?", att: &attachment{fileID: "f1", fileUniqueID: "u1", filename: "photo.jpg"}, mediaGroup: "g1"},
+		{att: &attachment{fileID: "f2", fileUniqueID: "u2", filename: "photo.jpg"}, mediaGroup: "g1"},
+		{text: "and compare them"},
+	})
+
+	assert.Contains(t, prompt, "The user sent 2 messages in a row")
+	assert.Contains(t, prompt, "--- Message 1 ---\nI'm sending you 2 files: photo.jpg (saved at "+filepath.Join(dir, "photo_u1.jpg")+
+		"), photo.jpg (saved at "+filepath.Join(dir, "photo_u2.jpg")+"). Please read them.\n\nwhat is on these?")
+	assert.Contains(t, prompt, "--- Message 2 ---\nand compare them")
+}
+
+func TestComposePrompt_AlbumDownloadFailure(t *testing.T) {
+	srv := newFileServer(t, map[string]string{"f1": "one"})
+	b, err := bot.New("123:SECRET", bot.WithServerURL(srv.URL), bot.WithSkipGetMe())
+	require.NoError(t, err)
+
+	prompt := (&Handler{Bot: b}).composePrompt(context.Background(), t.TempDir(), []Inbound{
+		{att: &attachment{fileID: "f1", fileUniqueID: "u1", filename: "a.jpg"}, mediaGroup: "g"},
+		{att: &attachment{fileID: "missing", fileUniqueID: "u2", filename: "b.jpg"}, mediaGroup: "g"},
+	})
+
+	assert.Contains(t, prompt, "I'm sending you 1 files: a.jpg")
+	assert.Contains(t, prompt, "(these attachments failed to download: b.jpg")
+	assert.NotContains(t, prompt, "SECRET")
 }
 
 // --- sendTyping tests ---
@@ -973,4 +904,242 @@ func TestSendTyping_StopsOnCancel(t *testing.T) {
 		t.Fatal("sendTyping did not stop after context cancel")
 	}
 	assert.GreaterOrEqual(t, called, 1, "should have called sendChatAction at least once")
+}
+
+// --- attachment naming and token redaction tests ---
+
+func TestLocalName(t *testing.T) {
+	cases := []struct {
+		name, filename, uid, want string
+	}{
+		{"photo with uid", "photo.jpg", "AgADx1", "photo_AgADx1.jpg"},
+		{"no uid keeps name", "report.pdf", "", "report.pdf"},
+		{"strips directories", "../../etc/passwd", "u1", "passwd_u1"},
+		{"empty name", "", "u1", "file_u1"},
+		{"dot dot", "..", "u1", "file_u1"},
+		{"multiple dots", "archive.tar.gz", "u1", "archive.tar_u1.gz"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, localName(&attachment{filename: tc.filename, fileUniqueID: tc.uid}))
+		})
+	}
+}
+
+func newFileServer(t *testing.T, contents map[string]string) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "getFile") {
+			require.NoError(t, r.ParseMultipartForm(1<<20))
+			id := r.FormValue("file_id")
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprintf(w, `{"ok":true,"result":{"file_id":%q,"file_path":"photos/%s.jpg"}}`, id, id)
+			return
+		}
+		for id, body := range contents {
+			if strings.HasSuffix(r.URL.Path, "/photos/"+id+".jpg") {
+				_, _ = w.Write([]byte(body))
+				return
+			}
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestDownloadAttachment_AlbumPhotosDoNotOverwrite(t *testing.T) {
+	srv := newFileServer(t, map[string]string{"f1": "first", "f2": "second"})
+	b, err := bot.New("123:SECRET", bot.WithServerURL(srv.URL), bot.WithSkipGetMe())
+	require.NoError(t, err)
+	dir := t.TempDir()
+
+	atts := []*attachment{
+		{fileID: "f1", fileUniqueID: "u1", filename: "photo.jpg"},
+		{fileID: "f2", fileUniqueID: "u2", filename: "photo.jpg"},
+	}
+	paths := make([]string, len(atts))
+	var wg sync.WaitGroup
+	for i, att := range atts {
+		wg.Go(func() {
+			p, err := downloadAttachment(context.Background(), b, att, dir)
+			assert.NoError(t, err)
+			paths[i] = p
+		})
+	}
+	wg.Wait()
+
+	require.NotEqual(t, paths[0], paths[1])
+	for i, want := range []string{"first", "second"} {
+		got, err := os.ReadFile(paths[i])
+		require.NoError(t, err)
+		assert.Equal(t, want, string(got))
+	}
+	leftovers, err := filepath.Glob(filepath.Join(dir, "*.part"))
+	require.NoError(t, err)
+	assert.Empty(t, leftovers)
+}
+
+func TestDownloadAttachment_DoesNotLogBotToken(t *testing.T) {
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	srv := newFileServer(t, map[string]string{"f1": "data"})
+	b, err := bot.New("123:SECRET", bot.WithServerURL(srv.URL), bot.WithSkipGetMe())
+	require.NoError(t, err)
+
+	_, err = downloadAttachment(context.Background(), b, &attachment{fileID: "f1", fileUniqueID: "u1", filename: "photo.jpg"}, t.TempDir())
+	require.NoError(t, err)
+
+	assert.NotContains(t, logs.String(), "SECRET")
+}
+
+func TestFetchToFile_ErrorOmitsURL(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	link := srv.URL + "/file/bot123:SECRET/photos/f1.jpg"
+	srv.Close()
+
+	err := fetchToFile(context.Background(), link, filepath.Join(t.TempDir(), "out.jpg"))
+
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "SECRET")
+}
+
+func TestWithErrorText(t *testing.T) {
+	timeout := fmt.Errorf("claude: %w", &invoker.TimeoutError{After: time.Hour})
+
+	assert.Equal(t, "ok", withErrorText(&cli.Result{Text: "ok"}, nil).Text)
+	assert.Equal(t, "partial", withErrorText(&cli.Result{Text: "partial"}, errors.New("x")).Text)
+	assert.Equal(t, "error: boom", withErrorText(&cli.Result{}, errors.New("boom")).Text)
+	assert.Equal(t, "⏱ Stopped: the run took longer than 1h0m0s.", withErrorText(&cli.Result{}, timeout).Text)
+	assert.Equal(t, "half done\n\n⏱ Stopped: the run took longer than 1h0m0s.", withErrorText(&cli.Result{Text: "half done"}, timeout).Text)
+}
+
+type progressClient struct {
+	mockClient
+	onTool cli.ToolHandler
+}
+
+func (c *progressClient) Context(context.Context) cli.Client   { return c }
+func (c *progressClient) Dir(string) cli.Client                { return c }
+func (c *progressClient) SkipPermissions() cli.Client          { return c }
+func (c *progressClient) AppendSystemPrompt(string) cli.Client { return c }
+func (c *progressClient) OnToolUse(h cli.ToolHandler) cli.Client {
+	c.onTool = h
+	return c
+}
+func (c *progressClient) Continue(string) (*cli.Result, error) {
+	c.onTool(cli.ToolEvent{Name: "Bash", Detail: "make test"})
+	time.Sleep(50 * time.Millisecond)
+	return &cli.Result{Text: "tests pass", FullText: "tests pass"}, nil
+}
+
+type progressProvider struct {
+	mockProvider
+	client *progressClient
+}
+
+func (p *progressProvider) NewClient() cli.Client { return p.client }
+
+type progressAPI struct {
+	mu  sync.Mutex
+	ops []string
+}
+
+func (a *progressAPI) Send(_ context.Context, _ int64, _ int, text string) (int, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.ops = append(a.ops, "send:"+text[:strings.Index(text, "\n")])
+	return 9, nil
+}
+func (a *progressAPI) Edit(context.Context, int64, int, string) error { return nil }
+func (a *progressAPI) Delete(_ context.Context, _ int64, msgID int) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.ops = append(a.ops, fmt.Sprintf("delete:%d", msgID))
+	return nil
+}
+
+func TestRunBatch_ShowsAndRemovesProgress(t *testing.T) {
+	api := &progressAPI{}
+	sent := &safeSent{}
+	h := newTestHandler(t, &progressProvider{client: &progressClient{}}, sent.send)
+	h.Progress = api
+
+	h.RunBatch(context.Background(), testKey, []Inbound{{text: "run tests"}})
+
+	assert.Equal(t, []string{"send:🔧 Bash: make test", "delete:9"}, api.ops)
+	assert.Equal(t, []string{"tests pass"}, sent.all())
+}
+
+// --- transcription tests ---
+
+type fakeTranscriber struct {
+	text  string
+	err   error
+	calls []string
+}
+
+func (f *fakeTranscriber) Transcribe(_ context.Context, path string) (string, error) {
+	f.calls = append(f.calls, path)
+	return f.text, f.err
+}
+
+func voiceHandler(t *testing.T, tr Transcriber) *Handler {
+	t.Helper()
+	srv := newFileServer(t, map[string]string{"v1": "opus"})
+	b, err := bot.New("123:SECRET", bot.WithServerURL(srv.URL), bot.WithSkipGetMe())
+	require.NoError(t, err)
+	return &Handler{Bot: b, Transcriber: tr}
+}
+
+func TestBuildPrompt_VoiceIsTranscribed(t *testing.T) {
+	tr := &fakeTranscriber{text: "напомни выпить воды"}
+	h := voiceHandler(t, tr)
+	dir := t.TempDir()
+
+	prompt := h.buildPrompt(context.Background(), "", &attachment{fileID: "v1", fileUniqueID: "u1", filename: "voice.ogg", speech: true, duration: 4}, dir)
+
+	path := filepath.Join(dir, "voice_u1.ogg")
+	assert.Equal(t, []string{path}, tr.calls)
+	assert.Equal(t, "[Voice message, transcribed]: напомни выпить воды\n\n(Transcribed locally from "+path+
+		". Treat the text above as my message; the audio does not need to be transcribed again.)", prompt)
+}
+
+func TestBuildPrompt_TranscriptionFallbacks(t *testing.T) {
+	cases := map[string]struct {
+		tr  Transcriber
+		att attachment
+	}{
+		"error":      {&fakeTranscriber{err: errors.New("whisper failed")}, attachment{speech: true, duration: 4}},
+		"too long":   {&fakeTranscriber{text: "x"}, attachment{speech: true, duration: maxSpeechSeconds + 1}},
+		"not speech": {&fakeTranscriber{text: "x"}, attachment{}},
+		"disabled":   {nil, attachment{speech: true, duration: 4}},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			h := voiceHandler(t, tc.tr)
+			att := tc.att
+			att.fileID, att.fileUniqueID, att.filename = "v1", "u1", "voice.ogg"
+
+			prompt := h.buildPrompt(context.Background(), "caption", &att, t.TempDir())
+
+			assert.True(t, strings.HasPrefix(prompt, "I'm sending you a file: voice.ogg"), prompt)
+			assert.True(t, strings.HasSuffix(prompt, "caption"))
+		})
+	}
+}
+
+func TestExtractAttachment_SpeechFlags(t *testing.T) {
+	voice := extractAttachment(&models.Message{Voice: &models.Voice{FileID: "v", Duration: 7}})
+	assert.True(t, voice.speech)
+	assert.Equal(t, 7, voice.duration)
+
+	note := extractAttachment(&models.Message{VideoNote: &models.VideoNote{FileID: "n", Duration: 9}})
+	assert.True(t, note.speech)
+	assert.Equal(t, 9, note.duration)
+
+	assert.False(t, extractAttachment(&models.Message{Audio: &models.Audio{FileID: "a"}}).speech)
+	assert.False(t, extractAttachment(&models.Message{Document: &models.Document{FileID: "d"}}).speech)
 }

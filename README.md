@@ -21,6 +21,8 @@
 - [Configuration](#configuration)
   - [Environment variables](#environment-variables)
   - [Config file](#config-file)
+- [Chat commands](#chat-commands)
+- [Voice messages](#voice-messages)
 - [Scheduling](#scheduling)
 - [Webhooks](#webhooks)
 - [Skills](#skills)
@@ -56,11 +58,15 @@ The recommended way to run NClaw is inside Docker — the container serves as a 
 
 - **Session persistence** — Each chat/topic maintains its own session. Pick up where you left off.
 - **Telegram topics** — Each topic in a group chat is a separate project with isolated context and files.
-- **File attachments** — Send photos, documents, audio, video to the assistant.
+- **File attachments** — Send photos, documents, audio, video to the assistant. Albums arrive as one request.
+- **Voice messages** — Voice notes and video notes are transcribed locally with whisper.cpp and handled like typed messages.
+- **Ordered message queue** — Messages sent while the assistant is busy are answered in order, in a single combined run.
+- **Live progress** — A status message shows the agent's current step (e.g. "🔧 Bash: Run the test suite") while it works.
+- **Chat commands** — `/stop` cancels the current run, `/new` starts a fresh conversation, `/status` shows what the bot is doing.
 - **File delivery** — The assistant can send files back to you (generated reports, exports, code).
 - **Scheduled tasks** — Create recurring or one-time jobs using natural language.
 - **Webhooks** — Register HTTP endpoints that forward incoming requests to the assistant in your chat.
-- **Rich runtime** — Docker image includes git, gh CLI, Chromium, Go, Node.js, Python/uv. The assistant can install additional packages on the fly as needed — for example, `apk add ffmpeg` to process video, `npm install -g prettier` to format code, or `pip install pandas` to analyze data.
+- **Rich runtime** — Docker image includes git, gh CLI, Chromium, Go, Node.js, Python/uv. The assistant can install additional packages on the fly as needed — for example, `apk add imagemagick` to process images, `npm install -g prettier` to format code, or `pip install pandas` to analyze data.
 - **Multiple CLI agents** — Supports Claude Code (default), multi-model (580+ models via OpenRouter, Gemini, OpenAI, Ollama, etc.), OpenAI Codex, GitHub Copilot, and Google Gemini CLI. Switch agents via the `NCLAW_CLI` environment variable.
 - **HTML-formatted replies** — Responses render using Telegram's HTML formatting with plain-text fallback.
 
@@ -126,10 +132,10 @@ The fastest way to get started is with the **multi-model** image using a free Ge
 
 To use **Claude Code** instead (requires an Anthropic account with Claude Code access):
 
-1. Install Claude Code and authenticate:
+1. Install Claude Code and create a long-lived token:
    ```bash
    curl -fsSL https://claude.ai/install.sh | bash
-   claude login
+   claude setup-token
    ```
 
 2. Run:
@@ -138,8 +144,9 @@ To use **Claude Code** instead (requires an Anthropic account with Claude Code a
      -e NCLAW_TELEGRAM_BOT_TOKEN=your-bot-token \
      -e NCLAW_TELEGRAM_WHITELIST_CHAT_IDS=your-chat-id \
      -e NCLAW_DATA_DIR=/app/data \
+     -e CLAUDE_CODE_OAUTH_TOKEN=token-from-setup-token \
      -v ./data:/app/data \
-     -v ~/.claude/.credentials.json:/root/.claude/.credentials.json \
+     -v ./claude:/root/.claude \
      ghcr.io/nickalie/nclaw:claude
    ```
 
@@ -147,11 +154,11 @@ See [Docker](#docker) for all image variants and [Configuration](#configuration)
 
 ## Docker
 
-NClaw provides six Docker images, all based on `node:24-alpine` with shared tools (git, gh CLI, Chromium, Go, Node.js, Python/uv, skills). They differ only in which CLI agent is pre-installed:
+NClaw provides six Docker images. Five are based on `node:24-alpine` with shared tools (git, gh CLI, Chromium, Go, Node.js, Python/uv, ffmpeg, whisper.cpp with a speech model, skills); the Copilot image is based on `node:24-slim` because the Copilot CLI needs glibc. They differ mainly in which CLI agent is pre-installed:
 
 | Image | Tag | CLI Backends | Size |
 |---|---|---|---|
-| **All-in-one** | `latest` | Claude Code + Multi-Model + Codex + Copilot + Gemini | Largest |
+| **All-in-one** | `latest` | Claude Code + Multi-Model + Codex + Gemini | Largest |
 | **Claude** | `claude` | Claude Code | Medium |
 | **Multi-Model** | `multi-model` | Claude Code + Multi-Model | Medium |
 | **Codex** | `codex` | OpenAI Codex | Medium |
@@ -165,7 +172,9 @@ All images are published to `ghcr.io/nickalie/nclaw` and built for **linux/amd64
 - **Apple Silicon** Macs — native arm64 without Rosetta emulation
 - **Oracle Cloud Ampere** or any other arm64 cloud VM
 
-The assistant can install additional packages at runtime (e.g. `apk add ffmpeg`, `pip install pandas`, `npm install -g typescript`).
+The assistant can install additional packages at runtime (e.g. `apk add imagemagick`, `pip install pandas`, `npm install -g typescript`).
+
+Every image runs nclaw under [tini](https://github.com/krallin/tini), so processes left behind by the agent are reaped, and handles `SIGTERM` gracefully: running requests are stopped, affected chats are told to resend them, and the bot exits within about 20 seconds. Give the container at least 30 seconds to stop (`stop_grace_period: 30s` in Compose, `--stop-timeout 30` for `docker run`).
 
 ### Claude (default)
 
@@ -174,12 +183,15 @@ docker run -d --name nclaw \
   -e NCLAW_TELEGRAM_BOT_TOKEN=your-token \
   -e NCLAW_TELEGRAM_WHITELIST_CHAT_IDS=your-chat-id \
   -e NCLAW_DATA_DIR=/app/data \
+  -e CLAUDE_CODE_OAUTH_TOKEN=your-oauth-token \
   -v ./data:/app/data \
-  -v ~/.claude/.credentials.json:/root/.claude/.credentials.json \
+  -v ./claude:/root/.claude \
   ghcr.io/nickalie/nclaw:claude
 ```
 
-Claude Code uses OAuth authentication. Mount your credentials file from `~/.claude/.credentials.json`. To obtain credentials, install Claude Code locally and run `claude login`. Do **not** mount the file as read-only (`:ro`) — write access is required so the token can be refreshed automatically.
+Authenticate Claude Code with a long-lived token: run `claude setup-token` once on any machine where Claude Code is installed and pass the printed token as `CLAUDE_CODE_OAUTH_TOKEN`. The token is valid for a year and needs no refresh, so nclaw skips its own token refresh when it is set. The `./claude` volume keeps the agent's conversations, settings and skills across container restarts.
+
+Alternatively, log in inside the container once (`docker exec -it nclaw claude`, then `/login`); the credentials are stored in the `./claude` volume and refreshed automatically. Avoid bind-mounting the live `~/.claude/.credentials.json` of a machine where you also use Claude Code: both sides rotate the same refresh token and one of them gets logged out.
 
 ### Multi-Model
 
@@ -236,7 +248,7 @@ docker run -d --name nclaw \
   ghcr.io/nickalie/nclaw:copilot
 ```
 
-Copilot uses GitHub OAuth authentication. Mount your config file from `~/.copilot/config.json`. To obtain credentials, install Copilot CLI locally (`npm install -g @githubnext/github-copilot-cli`) and run `/login`.
+Copilot uses GitHub OAuth authentication. Mount your config file from `~/.copilot/config.json`. To obtain credentials, install Copilot CLI locally (`npm install -g @github/copilot`), run `copilot` and then `/login`. Alternatively, pass a fine-grained personal access token with the "Copilot Requests" permission as `COPILOT_GITHUB_TOKEN`.
 
 ### Gemini
 
@@ -260,12 +272,13 @@ docker run -d --name nclaw \
   -e NCLAW_TELEGRAM_BOT_TOKEN=your-token \
   -e NCLAW_TELEGRAM_WHITELIST_CHAT_IDS=your-chat-id \
   -e NCLAW_DATA_DIR=/app/data \
+  -e CLAUDE_CODE_OAUTH_TOKEN=your-oauth-token \
   -v ./data:/app/data \
-  -v ~/.claude/.credentials.json:/root/.claude/.credentials.json \
+  -v ./claude:/root/.claude \
   ghcr.io/nickalie/nclaw:latest
 ```
 
-The all-in-one image includes all five CLI agents. Set `NCLAW_CLI` to `claude` (default), `claudish` (multi-model), `codex`, `copilot`, or `gemini` to choose the agent. Mount the appropriate credentials for your chosen agent.
+The all-in-one image includes four CLI agents. Set `NCLAW_CLI` to `claude` (default), `claudish` (multi-model), `codex`, or `gemini` to choose the agent, and provide the credentials for your chosen agent. GitHub Copilot is only available in the `copilot` image.
 
 ### Webhooks
 
@@ -279,8 +292,9 @@ docker run -d --name nclaw \
   -e NCLAW_WEBHOOK_BASE_DOMAIN=example.com \
   -e NCLAW_WEBHOOK_PORT=:3000 \
   -p 3000:3000 \
+  -e CLAUDE_CODE_OAUTH_TOKEN=your-oauth-token \
   -v ./data:/app/data \
-  -v ~/.claude/.credentials.json:/root/.claude/.credentials.json \
+  -v ./claude:/root/.claude \
   ghcr.io/nickalie/nclaw:latest
 ```
 
@@ -297,13 +311,14 @@ A `docker-compose.yml` is included in the repository for a quick self-hosted set
    # Image tag: claude (default), multi-model, codex, copilot, gemini, latest
    # NCLAW_IMAGE_TAG=claude
 
-   # Path to Claude Code credentials
-   # Windows: C:/Users/<username>/.claude/.credentials.json
-   # Linux/Mac: /home/<username>/.claude/.credentials.json
-   CLAUDE_CREDENTIALS_PATH=/home/<username>/.claude/.credentials.json
+   # Long-lived token from `claude setup-token`
+   CLAUDE_CODE_OAUTH_TOKEN=your-oauth-token
 
-   # Skills persistence (optional — these are the defaults)
-   # CLAUDE_SKILLS_PATH=./claude-skills
+   # Voice transcription language (optional, default: auto-detect)
+   # NCLAW_WHISPER_LANGUAGE=ru
+
+   # Host directories (optional — these are the defaults)
+   # CLAUDE_HOME_PATH=./claude
    # AGENTS_PATH=./agents
 
    # Proxy (optional)
@@ -315,6 +330,23 @@ A `docker-compose.yml` is included in the repository for a quick self-hosted set
    ```bash
    docker compose up -d
    ```
+
+`./claude` holds everything Claude Code keeps in `/root/.claude` — conversations, settings, credentials, skills — so recreating the container keeps every chat's memory. Bundled skills are copied into `./claude/skills` on startup when missing; your own changes to them are never overwritten.
+
+**Upgrading from the old layout** (separate `CLAUDE_CREDENTIALS_PATH`, `CLAUDE_SKILLS_PATH`, `CLAUDE_CONFIG_PATH` mounts). Copy the conversations out of the running container first, then move the old directories into `./claude`:
+
+```bash
+docker cp nclaw:/root/.claude/projects ./claude-projects.tmp
+docker cp nclaw:/root/.claude.json ./claude.json.tmp
+docker compose down
+mkdir -p claude
+mv claude-skills claude/skills
+mv claude-config claude/backups
+mv claude-projects.tmp claude/projects
+mv claude.json.tmp claude/.claude.json
+```
+
+Then remove `CLAUDE_CREDENTIALS_PATH`, `CLAUDE_SKILLS_PATH` and `CLAUDE_CONFIG_PATH` from `.env`, add `CLAUDE_CODE_OAUTH_TOKEN`, and run `docker compose pull && docker compose up -d`.
 
 **Management:**
 
@@ -448,6 +480,7 @@ kubectl create secret generic my-gemini-secret \
 | `env.whitelistChatIds` | `""` | Comma-separated allowed chat IDs |
 | `env.webhookBaseDomain` | `""` | Base domain for webhook URLs |
 | `env.cli` | `""` | CLI agent: `claude`, `claudish` (multi-model), `codex`, `copilot`, or `gemini` (empty = image default) |
+| `env.claudeExecPath` | `""` | Full path to the Claude CLI binary (empty = use `claude` from `PATH`) |
 | `env.model` | `""` | Model for multi-model backend (e.g. `g@gemini-2.5-pro`). Setting this auto-selects multi-model |
 | `existingSecret` | `""` | Use existing secret for bot token (key: `telegram-bot-token`) |
 | `claudeCredentialsSecret` | `""` | Secret with Claude credentials (key: `credentials.json`) |
@@ -567,6 +600,15 @@ NClaw variables use the `NCLAW_` prefix. Provider API keys use the provider's na
 | `NCLAW_TELEGRAM_BOT_TOKEN` | Yes | — | Telegram bot token from [@BotFather](https://t.me/BotFather) |
 | `NCLAW_DATA_DIR` | Yes | — | Base directory for session data and files |
 | `NCLAW_CLI` | No | `claude` | CLI agent: `claude`, `claudish` (multi-model), `codex`, `copilot`, or `gemini`. Auto-selects `claudish` when `NCLAW_MODEL` is set |
+| `NCLAW_CLAUDE_EXEC_PATH` | No | `claude` | Full path to the Claude CLI binary |
+| `NCLAW_CLI_TIMEOUT` | No | `60m` | Maximum duration of one CLI run (Go duration, or a number of seconds; `0` disables). A run that exceeds it is stopped |
+| `NCLAW_PROGRESS` | No | `true` | Show a status message with the agent's current step while a request runs (Claude/Claudish backends) |
+| `NCLAW_STARTUP_NOTIFICATION` | No | `false` | Send a "bot started" message to whitelisted chats on startup |
+| `NCLAW_STREAM_MESSAGES` | No | `false` | Send every intermediate assistant message as a separate reply instead of only the final one |
+| `NCLAW_WHISPER_MODEL` | No | set in the images | Path to a whisper.cpp ggml model; empty disables voice transcription |
+| `NCLAW_WHISPER_LANGUAGE` | No | `auto` | Spoken-language hint for transcription (e.g. `ru`, `en`) |
+| `NCLAW_WHISPER_BIN` | No | `whisper-cli` | whisper.cpp CLI binary |
+| `NCLAW_BUNDLED_SKILLS_DIR` | No | `/opt/nclaw-skills` | Directory with skills shipped in the image; missing ones are installed into the agent's skills directory at startup |
 | `NCLAW_MODEL` | No | — | Model for multi-model backend (e.g. `g@gemini-2.5-pro`). Setting this auto-selects multi-model |
 | `NCLAW_COPILOT_MODEL` | No | — | Model for Copilot backend (e.g. `gpt-4.1`). Only used when `NCLAW_CLI=copilot` |
 | `NCLAW_TELEGRAM_WHITELIST_CHAT_IDS` | No | — | Comma-separated list of allowed Telegram chat IDs. If unset, accepts all chats (with a security warning) |
@@ -588,6 +630,7 @@ telegram:
   whitelist_chat_ids: "123456789,987654321"
 
 cli: "claude"  # Options: claude, claudish, codex, copilot, gemini
+claude_exec_path: ""       # e.g. "/opt/claude/bin/claude" (empty = use PATH)
 data_dir: "/app/data"
 db_path: "/app/data/nclaw.db"
 timezone: "Europe/Berlin"
@@ -604,6 +647,24 @@ webhook:
   base_domain: "example.com"
   port: ":3000"
 ```
+
+## Chat commands
+
+| Command | What it does |
+|---|---|
+| `/stop` | Cancels the current run in this chat (the agent's whole process tree is stopped) and drops queued messages and pending task/webhook runs |
+| `/new` | Starts a new conversation after the current queue: the previous session is archived (Claude/Claudish) or the next run starts without resuming (other backends) |
+| `/status` | Shows what is running and for how long, what is queued, the session size and the backend |
+
+Commands work while the assistant is busy and are registered in Telegram's command menu. In groups, `/command@yourbot` is supported; commands addressed to other bots are ignored.
+
+Messages sent while a request is running wait in the chat's queue and are answered together in the next run, in the order they were sent.
+
+## Voice messages
+
+Voice messages and video notes up to 10 minutes are converted with ffmpeg and transcribed by [whisper.cpp](https://github.com/ggml-org/whisper.cpp) inside the container, before the request reaches the agent. The agent receives the transcript as if you had typed it (plus the path of the audio file). Nothing is sent to an external speech service.
+
+The images ship the multilingual `ggml-small-q5_1` model (≈190 MB). Transcribing a short note takes a few seconds on 2 CPU cores and needs about 500 MB of RAM on top of the agent, so give the container at least 2 GB. Set `NCLAW_WHISPER_LANGUAGE` (e.g. `ru`) if you mostly speak one language. To use another model, build the image with `--build-arg WHISPER_MODEL=<name> --build-arg WHISPER_MODEL_SHA256=<sha256>` or mount a model file and point `NCLAW_WHISPER_MODEL` at it. If transcription is unavailable or fails, the audio file is passed to the agent as before.
 
 ## Scheduling
 
@@ -643,6 +704,8 @@ Six skills ship with nclaw:
 | `find-skills` | [vercel-labs/skills](https://github.com/vercel-labs/skills) | Discover and install additional agent skills |
 | `skill-creator` | [anthropics/skills](https://github.com/anthropics/skills) | Guide for creating new custom skills |
 | `agent-browser` | [vercel-labs/agent-browser](https://github.com/vercel-labs/agent-browser) | Browse the web using system Chromium |
+
+Bundled skills live in `/opt/nclaw-skills` inside the images. On startup nclaw copies every bundled skill that is missing into the agent's skills directory (`/root/.claude/skills`, plus `~/.codex/skills` or `~/.gemini/skills` for those backends). Existing skills — including ones you edited — are never overwritten; delete a skill's directory to get the bundled version back.
 
 The assistant can also create its own skills on the fly when a task requires specialized or repeatable behavior that isn't covered by the built-in set. It can even [learn to produce music](https://nclaw.io/music/).
 

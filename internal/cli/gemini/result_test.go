@@ -1,6 +1,7 @@
 package gemini
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -261,4 +262,13 @@ func TestIsNonAssistantEvent(t *testing.T) {
 			assert.Equal(t, tt.expected, isNonAssistantEvent([]byte(tt.line)))
 		})
 	}
+}
+
+func TestParseStreamJSONOutput_LineOverOneMegabyte(t *testing.T) {
+	output := `{"type":"tool_result","tool_id":"t1","status":"success","output":"` + strings.Repeat("A", 2<<20) + `"}` + "\n" +
+		`{"type":"message","role":"assistant","content":"Done."}` + "\n"
+
+	result := parseStreamJSONOutput([]byte(output))
+
+	assert.Equal(t, "Done.", result.Text)
 }

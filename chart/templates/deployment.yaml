@@ -32,8 +32,9 @@ spec:
             - -c
             - |
               mkdir -p /app/data/.claude /app/data/.config
-              if [ ! -f /app/data/.claude/credentials.json ]; then
-                cp /tmp/credentials/credentials.json /app/data/.claude/credentials.json
+              if [ ! -f /app/data/.claude/.credentials.json ]; then
+                cp /tmp/credentials/credentials.json /app/data/.claude/.credentials.json
+                chmod 600 /app/data/.claude/.credentials.json
               fi
           volumeMounts:
             - name: data
@@ -42,17 +43,14 @@ spec:
               mountPath: /tmp/credentials
               readOnly: true
         {{- end }}
-        - name: init-skills
+        - name: init-settings
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           command:
             - sh
             - -c
             - |
-              if [ -d /root/.claude/skills ]; then
-                mkdir -p /dest/.claude/skills
-                cp -r /root/.claude/skills/* /dest/.claude/skills/ 2>/dev/null || true
-              fi
-              if [ -f /root/.claude/settings.json ]; then
+              mkdir -p /dest/.claude
+              if [ -f /root/.claude/settings.json ] && [ ! -f /dest/.claude/settings.json ]; then
                 cp /root/.claude/settings.json /dest/.claude/settings.json
               fi
           volumeMounts:
@@ -81,6 +79,10 @@ spec:
             {{- if .Values.env.cli }}
             - name: NCLAW_CLI
               value: {{ .Values.env.cli | quote }}
+            {{- end }}
+            {{- if .Values.env.claudeExecPath }}
+            - name: NCLAW_CLAUDE_EXEC_PATH
+              value: {{ .Values.env.claudeExecPath | quote }}
             {{- end }}
             {{- if .Values.env.model }}
             - name: NCLAW_MODEL

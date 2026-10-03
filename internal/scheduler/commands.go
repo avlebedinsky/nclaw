@@ -4,14 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"regexp"
 	"strings"
 	"time"
 
+	"github.com/nickalie/nclaw/internal/blocks"
+	"github.com/nickalie/nclaw/internal/db"
 	"github.com/nickalie/nclaw/internal/model"
 )
-
-var scheduleBlockRe = regexp.MustCompile("(?s)```nclaw:schedule\n(.*?)\n```")
 
 type scheduleCommand struct {
 	Action  string `json:"action"`
@@ -25,7 +24,7 @@ type scheduleCommand struct {
 // ExecuteBlocks extracts nclaw:schedule code blocks from text, executes them,
 // and returns any status messages (errors). Does not modify the input text.
 func (s *Scheduler) ExecuteBlocks(text string, chatID int64, threadID int) string {
-	matches := scheduleBlockRe.FindAllStringSubmatch(text, -1)
+	matches := blocks.Schedule.FindAllStringSubmatch(text, -1)
 	if len(matches) == 0 {
 		return ""
 	}
@@ -56,15 +55,36 @@ func (s *Scheduler) executeCommand(jsonStr string, chatID int64, threadID int) e
 	switch cmd.Action {
 	case "create":
 		return s.createTaskFromCommand(&cmd, chatID, threadID)
-	case "pause":
-		return s.PauseTask(cmd.TaskID)
-	case "resume":
-		return s.ResumeTask(cmd.TaskID)
-	case "cancel":
-		return s.CancelTask(cmd.TaskID)
+	case "pause", "resume", "cancel":
+		return s.applyTaskAction(cmd.Action, cmd.TaskID, chatID, threadID)
 	default:
 		return fmt.Errorf("unknown action %q", cmd.Action)
 	}
+}
+
+func (s *Scheduler) applyTaskAction(action, taskID string, chatID int64, threadID int) error {
+	if err := s.checkOwner(taskID, chatID, threadID); err != nil {
+		return err
+	}
+	switch action {
+	case "pause":
+		return s.PauseTask(taskID)
+	case "resume":
+		return s.ResumeTask(taskID)
+	default:
+		return s.CancelTask(taskID)
+	}
+}
+
+func (s *Scheduler) checkOwner(taskID string, chatID int64, threadID int) error {
+	task, err := db.GetTask(s.db, taskID)
+	if err != nil {
+		return fmt.Errorf("task not found: %s: %w", taskID, err)
+	}
+	if task.ChatID != chatID || task.ThreadID != threadID {
+		return fmt.Errorf("task not found: %s", taskID)
+	}
+	return nil
 }
 
 func (s *Scheduler) createTaskFromCommand(cmd *scheduleCommand, chatID int64, threadID int) error {

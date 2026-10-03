@@ -22,7 +22,7 @@ docker:
 	docker run --name nclaw \
 		--env-file .env \
 		-v $(CURDIR)/data:/app/data:Z \
-		-v ~/.claude/.credentials.json:/root/.claude/.credentials.json:ro,Z \
+		-v $(CURDIR)/claude:/root/.claude:Z \
 		--network=host \
 		nclaw
 

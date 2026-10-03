@@ -1,7 +1,9 @@
 package config
 
 import (
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
@@ -87,6 +89,32 @@ func TestWhitelistChatIDs_Single(t *testing.T) {
 	assert.Equal(t, []int64{42}, ids)
 }
 
+func TestStartupNotification_Default(t *testing.T) {
+	viper.Reset()
+
+	assert.False(t, StartupNotification())
+}
+
+func TestStartupNotification_Enabled(t *testing.T) {
+	viper.Set("startup_notification", true)
+	defer viper.Reset()
+
+	assert.True(t, StartupNotification())
+}
+
+func TestStreamMessages_Default(t *testing.T) {
+	viper.Reset()
+
+	assert.False(t, StreamMessages())
+}
+
+func TestStreamMessages_Enabled(t *testing.T) {
+	viper.Set("stream_messages", true)
+	defer viper.Reset()
+
+	assert.True(t, StreamMessages())
+}
+
 func TestWebhookBaseDomain(t *testing.T) {
 	// Value should be a bare domain (no protocol) since WebhookURL prepends "https://".
 	viper.Set("webhook.base_domain", "example.com")
@@ -160,6 +188,13 @@ func TestCLI_ExplicitClaudishWithoutModel(t *testing.T) {
 func TestValidCLIBackends(t *testing.T) {
 	backends := ValidCLIBackends()
 	assert.Equal(t, []string{"claude", "claudish", "codex", "copilot", "gemini"}, backends)
+}
+
+func TestClaudeExecPath(t *testing.T) {
+	viper.Set("claude_exec_path", "/opt/claude/bin/claude")
+	defer viper.Reset()
+
+	assert.Equal(t, "/opt/claude/bin/claude", ClaudeExecPath())
 }
 
 func TestModel(t *testing.T) {
@@ -244,4 +279,75 @@ func TestInit_PartialRequired(t *testing.T) {
 	err := Init()
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "data_dir")
+}
+
+func TestLocation_Configured(t *testing.T) {
+	viper.Set("timezone", "Europe/Moscow")
+	defer viper.Reset()
+
+	assert.Equal(t, "Europe/Moscow", Location().String())
+}
+
+func TestLocation_InvalidFallsBackToLocal(t *testing.T) {
+	viper.Set("timezone", "Not/AZone")
+	defer viper.Reset()
+
+	assert.Equal(t, time.Local, Location())
+}
+
+func TestCLITimeout(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want time.Duration
+	}{
+		{"", 60 * time.Minute},
+		{"90", 90 * time.Second},
+		{"10m", 10 * time.Minute},
+		{"0", 0},
+		{"soon", 60 * time.Minute},
+		{"-5m", 60 * time.Minute},
+	}
+	for _, tc := range cases {
+		t.Run(tc.raw, func(t *testing.T) {
+			viper.Set("cli_timeout", tc.raw)
+			defer viper.Reset()
+			assert.Equal(t, tc.want, CLITimeout())
+		})
+	}
+}
+
+func TestProgress_DefaultsToEnabled(t *testing.T) {
+	viper.Reset()
+	assert.True(t, Progress())
+
+	viper.Set("progress", "false")
+	defer viper.Reset()
+	assert.False(t, Progress())
+}
+
+func TestBundledSkillsDir(t *testing.T) {
+	viper.Reset()
+	assert.Equal(t, "/opt/nclaw-skills", BundledSkillsDir())
+
+	viper.Set("bundled_skills_dir", "/srv/skills")
+	defer viper.Reset()
+	assert.Equal(t, "/srv/skills", BundledSkillsDir())
+}
+
+func TestWhisperSettings(t *testing.T) {
+	viper.Reset()
+	assert.Equal(t, "whisper-cli", WhisperBin())
+	assert.Empty(t, WhisperModel())
+	assert.Equal(t, "auto", WhisperLanguage())
+
+	t.Setenv("NCLAW_WHISPER_MODEL", "/opt/whisper/m.bin")
+	t.Setenv("NCLAW_WHISPER_LANGUAGE", "ru")
+	t.Setenv("NCLAW_WHISPER_BIN", "/usr/bin/whisper")
+	viper.AutomaticEnv()
+	viper.SetEnvPrefix("NCLAW")
+	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+	defer viper.Reset()
+	assert.Equal(t, "/opt/whisper/m.bin", WhisperModel())
+	assert.Equal(t, "ru", WhisperLanguage())
+	assert.Equal(t, "/usr/bin/whisper", WhisperBin())
 }

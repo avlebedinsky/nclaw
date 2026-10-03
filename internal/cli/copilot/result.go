@@ -1,10 +1,8 @@
 package copilot
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
-	"log"
 	"strings"
 
 	"github.com/nickalie/nclaw/internal/cli"
@@ -44,7 +42,7 @@ func parseJSONOutput(output []byte) parseResult {
 	lastMessage := messages[len(messages)-1]
 
 	return parseResult{
-		result:    &cli.Result{Text: lastMessage, FullText: fullText},
+		result:    &cli.Result{Text: lastMessage, FullText: fullText, Messages: messages},
 		sessionID: sessionID,
 	}
 }
@@ -52,11 +50,8 @@ func parseJSONOutput(output []byte) parseResult {
 // collectJSONEvents scans JSONL lines and collects non-empty assistant message contents
 // and the session ID from the result event.
 func collectJSONEvents(output []byte) (messages []string, sessionID string) {
-	scanner := bufio.NewScanner(bytes.NewReader(output))
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-
-	for scanner.Scan() {
-		line := scanner.Bytes()
+	for line := range bytes.Lines(output) {
+		line = bytes.TrimRight(line, "\r\n")
 		if len(line) == 0 {
 			continue
 		}
@@ -74,10 +69,6 @@ func collectJSONEvents(output []byte) (messages []string, sessionID string) {
 		case "result":
 			sessionID = event.SessionID
 		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		log.Printf("copilot: json scan error (output may be truncated): %v", err)
 	}
 
 	return messages, sessionID

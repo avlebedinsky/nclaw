@@ -1,6 +1,7 @@
 package copilot
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -90,4 +91,15 @@ func TestExtractAssistantContent_EmptyData(t *testing.T) {
 func TestExtractAssistantContent_ValidContent(t *testing.T) {
 	data := []byte(`{"content":"Hello","toolRequests":[]}`)
 	assert.Equal(t, "Hello", extractAssistantContent(data))
+}
+
+func TestParseJSONOutput_LineOverOneMegabyte(t *testing.T) {
+	input := `{"type":"tool.execution_complete","data":{"result":"` + strings.Repeat("A", 2<<20) + `"}}` + "\n" +
+		`{"type":"assistant.message","data":{"content":"Done."}}` + "\n" +
+		`{"type":"result","sessionId":"sess-big","exitCode":0}`
+
+	pr := parseJSONOutput([]byte(input))
+
+	assert.Equal(t, "Done.", pr.result.Text)
+	assert.Equal(t, "sess-big", pr.sessionID)
 }

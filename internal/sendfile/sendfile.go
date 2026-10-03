@@ -6,8 +6,9 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
+
+	"github.com/nickalie/nclaw/internal/blocks"
 )
 
 // MediaType indicates how a file should be sent via Telegram.
@@ -40,16 +41,9 @@ type SendMediaGroupFunc func(ctx context.Context, chatID int64, threadID int, fi
 
 const maxMediaGroupSize = 10
 
-var blockRe = regexp.MustCompile("(?s)```nclaw:sendfile\n(.*?)\n```")
-
 type command struct {
 	Path    string `json:"path"`
 	Caption string `json:"caption"`
-}
-
-// StripBlocks removes nclaw:sendfile code blocks from text without processing them.
-func StripBlocks(text string) string {
-	return strings.TrimSpace(blockRe.ReplaceAllString(text, ""))
 }
 
 // Senders groups all Telegram send callbacks used by ExecuteBlocks.
@@ -59,21 +53,22 @@ type Senders struct {
 	MediaGroup SendMediaGroupFunc
 }
 
-// ExecuteBlocks extracts nclaw:sendfile blocks from text and sends the files.
+// ExecuteBlocks extracts nclaw:sendfile blocks from text and sends the files. Relative
+// paths resolve against dir; files must lie under root (the chat directory) or the OS temp dir.
 // When sendMediaGroup is provided and there are 2+ files, files are grouped into media groups.
 // Does not modify the input text.
 func ExecuteBlocks(
 	ctx context.Context, senders Senders,
-	text string, chatID int64, threadID int, dir string,
+	text string, chatID int64, threadID int, dir, root string,
 ) {
-	matches := blockRe.FindAllStringSubmatch(text, -1)
+	matches := blocks.SendFile.FindAllStringSubmatch(text, -1)
 	if len(matches) == 0 {
 		return
 	}
 
 	var files []File
 	for _, match := range matches {
-		f, ok := resolveFile(match[1], dir)
+		f, ok := resolveFile(match[1], dir, root)
 		if ok {
 			files = append(files, f)
 		}
@@ -91,7 +86,7 @@ func ExecuteBlocks(
 	sendFilesAsGroups(ctx, senders.MediaGroup, files, chatID, threadID)
 }
 
-func resolveFile(jsonStr, dir string) (File, bool) {
+func resolveFile(jsonStr, dir, root string) (File, bool) {
 	var cmd command
 	if err := json.Unmarshal([]byte(jsonStr), &cmd); err != nil {
 		log.Printf("sendfile: invalid JSON: %v", err)
@@ -108,7 +103,7 @@ func resolveFile(jsonStr, dir string) (File, bool) {
 		log.Printf("sendfile: resolve error for %s: %v", filePath, err)
 		return File{}, false
 	}
-	if !isAllowedPath(resolved, dir) {
+	if !isAllowedPath(resolved, root) {
 		log.Printf("sendfile: path %q escapes allowed directories, rejected", cmd.Path)
 		return File{}, false
 	}

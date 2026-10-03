@@ -32,9 +32,8 @@ func TestSplitMessage_NoNewlineForceSplit(t *testing.T) {
 
 func TestSplitMessage_MultipleChunks(t *testing.T) {
 	msg := "aaaa\nbbbb\ncccc\ndddd"
-	// maxLen=9: "aaaa\nbbbb" is 9 chars, LastIndex of "\n" in first 9 is at index 4, so cuts at 4
 	result := SplitMessage(msg, 9)
-	assert.Equal(t, []string{"aaaa", "bbbb", "cccc\ndddd"}, result)
+	assert.Equal(t, []string{"aaaa\nbbbb", "cccc\ndddd"}, result)
 }
 
 func TestSplitMessage_EmptyString(t *testing.T) {

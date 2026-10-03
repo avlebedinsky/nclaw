@@ -1,7 +1,10 @@
 package scheduler
 
 import (
+	"context"
 	"errors"
+	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,8 +15,10 @@ import (
 	"gorm.io/gorm/logger"
 
 	"github.com/nickalie/nclaw/internal/cli"
+	"github.com/nickalie/nclaw/internal/invoker"
 	"github.com/nickalie/nclaw/internal/model"
 	"github.com/nickalie/nclaw/internal/pipeline"
+	"github.com/nickalie/nclaw/internal/sendfile"
 	"github.com/nickalie/nclaw/internal/telegram"
 )
 
@@ -572,6 +577,7 @@ func TestPauseThenResume(t *testing.T) {
 type mockCLIClient struct{}
 
 func (m *mockCLIClient) Dir(_ string) cli.Client                { return m }
+func (m *mockCLIClient) Context(context.Context) cli.Client     { return m }
 func (m *mockCLIClient) SkipPermissions() cli.Client            { return m }
 func (m *mockCLIClient) AppendSystemPrompt(_ string) cli.Client { return m }
 
@@ -598,7 +604,7 @@ func setupTestSchedulerWithMockCLI(t *testing.T) *Scheduler {
 	require.NoError(t, err)
 	require.NoError(t, database.AutoMigrate(&model.ScheduledTask{}, &model.TaskRunLog{}))
 
-	sched, err := New(database, &mockCLIProvider{}, "UTC", t.TempDir(), telegram.NewChatLocker())
+	sched, err := New(database, invoker.New(&mockCLIProvider{}, invoker.Options{DataDir: t.TempDir()}), inlineRunner{}, time.UTC)
 	require.NoError(t, err)
 	return sched
 }
@@ -871,7 +877,7 @@ func TestSendResult_NilPipeline(t *testing.T) {
 
 	// Should not panic
 	assert.NotPanics(t, func() {
-		s.sendResult(task, result, nil)
+		s.sendResult(task, result, nil, t.TempDir())
 	})
 }
 
@@ -891,4 +897,126 @@ func TestClearRunState(t *testing.T) {
 	defer s.mu.Unlock()
 	assert.False(t, s.running[taskID], "running flag should be cleared")
 	assert.False(t, s.canceled[taskID], "canceled flag should be cleared")
+}
+
+type recordingClient struct {
+	mu           sync.Mutex
+	dir          string
+	systemPrompt string
+	query        string
+	mode         string
+}
+
+func (c *recordingClient) Dir(dir string) cli.Client {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.dir = dir
+	return c
+}
+func (c *recordingClient) Context(context.Context) cli.Client { return c }
+func (c *recordingClient) SkipPermissions() cli.Client        { return c }
+func (c *recordingClient) AppendSystemPrompt(p string) cli.Client {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.systemPrompt = p
+	return c
+}
+func (c *recordingClient) Ask(q string) (*cli.Result, error)      { return c.run("ask", q) }
+func (c *recordingClient) Continue(q string) (*cli.Result, error) { return c.run("continue", q) }
+func (c *recordingClient) run(mode, q string) (*cli.Result, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.mode, c.query = mode, q
+	return &cli.Result{Text: "reply", FullText: "reply"}, nil
+}
+
+type recordingProvider struct{ client recordingClient }
+
+func (p *recordingProvider) NewClient() cli.Client    { return &p.client }
+func (p *recordingProvider) PreInvoke() error         { return nil }
+func (p *recordingProvider) Version() (string, error) { return "1", nil }
+func (p *recordingProvider) Name() string             { return "recording" }
+
+func setupRecordingScheduler(t *testing.T) (*Scheduler, *recordingProvider, *invoker.Invoker, *[]string) {
+	t.Helper()
+	database, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	require.NoError(t, err)
+	require.NoError(t, database.AutoMigrate(&model.ScheduledTask{}, &model.TaskRunLog{}))
+
+	provider := &recordingProvider{}
+	dataDir := t.TempDir()
+	inv := invoker.New(provider, invoker.Options{
+		DataDir:  dataDir,
+		TaskList: func(chatID int64, threadID int) string { return FormatTaskList(database, time.UTC, chatID, threadID) },
+	})
+	s, err := New(database, inv, inlineRunner{}, time.UTC)
+	require.NoError(t, err)
+
+	var sent []string
+	p := pipeline.New(func(_ context.Context, _ int64, _ int, text, _ string) error {
+		sent = append(sent, text)
+		return nil
+	}, sendfile.Senders{}, false)
+	p.SetDataDir(dataDir)
+	s.SetPipeline(p)
+	return s, provider, inv, &sent
+}
+
+func createRunnableTask(t *testing.T, s *Scheduler, contextMode string) *model.ScheduledTask {
+	t.Helper()
+	task := &model.ScheduledTask{
+		ID: model.GenerateTaskID(), ChatID: 100, ThreadID: 7, Prompt: "remind about water",
+		ScheduleType: model.ScheduleInterval, ScheduleValue: "1h",
+		ContextMode: contextMode, Status: model.StatusActive, CreatedAt: time.Now(),
+	}
+	require.NoError(t, s.db.Create(task).Error)
+	return task
+}
+
+func TestExecuteTask_GroupContinuesChatSessionWithSharedPrompt(t *testing.T) {
+	s, provider, inv, sent := setupRecordingScheduler(t)
+	task := createRunnableTask(t, s, model.ContextGroup)
+
+	s.executeTask(task.ID)
+
+	c := &provider.client
+	assert.Equal(t, "continue", c.mode)
+	assert.Equal(t, inv.ChatDir(100, 7), c.dir)
+	assert.Contains(t, c.systemPrompt, telegram.Prompt)
+	assert.Contains(t, c.systemPrompt, task.ID)
+	assert.Contains(t, c.query, "[SCHEDULED TASK")
+	assert.Contains(t, c.query, "remind about water")
+	assert.Equal(t, []string{"reply"}, *sent)
+}
+
+func TestExecuteTask_IsolatedRunsOutsideChatSession(t *testing.T) {
+	s, provider, inv, sent := setupRecordingScheduler(t)
+	task := createRunnableTask(t, s, model.ContextIsolated)
+
+	s.executeTask(task.ID)
+
+	c := &provider.client
+	assert.Equal(t, "ask", c.mode)
+	assert.Equal(t, filepath.Join(inv.ChatDir(100, 7), invoker.IsolatedDirName), c.dir)
+	assert.Contains(t, c.systemPrompt, telegram.Prompt)
+	assert.Equal(t, []string{"reply"}, *sent)
+}
+
+func TestExecuteTask_KeepsBoundedRunLogs(t *testing.T) {
+	s, _, _, _ := setupRecordingScheduler(t)
+	s.Start()
+	defer s.Shutdown()
+	task := &model.ScheduledTask{
+		ID: model.GenerateTaskID(), ChatID: 100, Prompt: "tick", ScheduleType: model.ScheduleInterval, ScheduleValue: "1h",
+		ContextMode: model.ContextGroup, Status: model.StatusActive, CreatedAt: time.Now(),
+	}
+	require.NoError(t, s.CreateTask(task))
+
+	for range keepRunLogs + 3 {
+		s.executeTask(task.ID)
+	}
+
+	var count int64
+	require.NoError(t, s.db.Model(&model.TaskRunLog{}).Where("task_id = ?", task.ID).Count(&count).Error)
+	assert.Equal(t, int64(keepRunLogs), count)
 }

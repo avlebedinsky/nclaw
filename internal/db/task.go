@@ -28,16 +28,6 @@ func ListTasksByChat(database *gorm.DB, chatID int64, threadID int) ([]model.Sch
 	return tasks, err
 }
 
-// GetDueTasks returns all active tasks whose next_run is at or before now.
-func GetDueTasks(database *gorm.DB) ([]model.ScheduledTask, error) {
-	var tasks []model.ScheduledTask
-	err := database.Where("status = ? AND next_run IS NOT NULL AND next_run <= ?",
-		model.StatusActive, time.Now()).
-		Order("next_run").
-		Find(&tasks).Error
-	return tasks, err
-}
-
 // UpdateTaskStatus sets the status of a task.
 func UpdateTaskStatus(database *gorm.DB, id, status string) error {
 	return database.Model(&model.ScheduledTask{}).Where("id = ?", id).Update("status", status).Error
@@ -65,4 +55,28 @@ func DeleteTask(database *gorm.DB, id string) error {
 		}
 		return tx.Where("id = ?", id).Delete(&model.ScheduledTask{}).Error
 	})
+}
+
+// DeleteFinishedTasks removes completed and failed tasks whose last run (or creation,
+// if they never ran) is older than before, together with their run logs.
+func DeleteFinishedTasks(database *gorm.DB, before time.Time) (int64, error) {
+	var deleted int64
+	err := database.Transaction(func(tx *gorm.DB) error {
+		var ids []string
+		if err := tx.Model(&model.ScheduledTask{}).
+			Where("status IN ? AND COALESCE(last_run, created_at) < ?", []string{model.StatusCompleted, model.StatusFailed}, before).
+			Pluck("id", &ids).Error; err != nil {
+			return err
+		}
+		if len(ids) == 0 {
+			return nil
+		}
+		if err := tx.Where("task_id IN ?", ids).Delete(&model.TaskRunLog{}).Error; err != nil {
+			return err
+		}
+		res := tx.Where("id IN ?", ids).Delete(&model.ScheduledTask{})
+		deleted = res.RowsAffected
+		return res.Error
+	})
+	return deleted, err
 }

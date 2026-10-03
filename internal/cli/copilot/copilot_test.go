@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	binwrapper "github.com/nickalie/go-binwrapper"
+	"github.com/nickalie/nclaw/internal/cli/procrun"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -286,7 +286,7 @@ func TestPrepareContinue_FallsBackToContinueWhenNoSessionID(t *testing.T) {
 }
 
 // TestHelperProcess provides a fake "copilot" binary for runAndParse tests.
-// It is invoked as a subprocess via binwrapper when GO_COPILOT_HELPER=1.
+// It is invoked as a subprocess via procrun when GO_COPILOT_HELPER=1.
 func TestHelperProcess(t *testing.T) {
 	if os.Getenv("GO_COPILOT_HELPER") != "1" {
 		return
@@ -317,7 +317,7 @@ func newWithHelperExec(t *testing.T, mode string) *Copilot {
 	t.Setenv("GO_COPILOT_HELPER_MODE", mode)
 
 	return &Copilot{
-		bin: binwrapper.NewBinWrapper().
+		bin: procrun.New().
 			ExecPath(exe).
 			Arg("-test.run=TestHelperProcess"),
 		dir: t.TempDir(),

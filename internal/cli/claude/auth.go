@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 )
@@ -43,8 +44,16 @@ type tokenRefreshResponse struct {
 	ExpiresIn    int64  `json:"expires_in"`
 }
 
+var envCredentialVars = []string{"CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"}
+
 // EnsureValidToken checks if the OAuth token is about to expire and refreshes it if needed.
+// It does nothing when credentials come from the environment, which the CLI prefers over
+// the credentials file.
 func EnsureValidToken() error {
+	if slices.ContainsFunc(envCredentialVars, func(name string) bool { return os.Getenv(name) != "" }) {
+		return nil
+	}
+
 	refreshMu.Lock()
 	defer refreshMu.Unlock()
 
@@ -202,7 +211,7 @@ func atomicWriteJSON(path string, data map[string]json.RawMessage) error {
 	if err := os.Rename(tmp, path); err != nil {
 		// Rename fails on Docker bind-mounted files (EBUSY/EXDEV).
 		// Fall back to direct write and clean up the temp file.
-		_ = os.Remove(tmp)
+		os.Remove(tmp) //nolint:errcheck // temp cleanup; falling back to direct write
 		return os.WriteFile(path, content, 0o600)
 	}
 
@@ -210,11 +219,11 @@ func atomicWriteJSON(path string, data map[string]json.RawMessage) error {
 }
 
 func defaultCredentialsPath() (string, error) {
-	home, err := os.UserHomeDir()
+	dir, err := ConfigDir()
 	if err != nil {
-		return "", fmt.Errorf("home dir: %w", err)
+		return "", err
 	}
-	return filepath.Join(home, ".claude", credentialFile), nil
+	return filepath.Join(dir, credentialFile), nil
 }
 
 func refreshAccessToken(refreshToken string) (*tokenRefreshResponse, error) {
@@ -234,11 +243,11 @@ func refreshAccessToken(refreshToken string) (*tokenRefreshResponse, error) {
 	if err != nil {
 		return nil, fmt.Errorf("POST %s: %w", tokenURLVal, err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck // response body already read
 
 	if resp.StatusCode != http.StatusOK {
 		var errBody json.RawMessage
-		_ = json.NewDecoder(resp.Body).Decode(&errBody)
+		json.NewDecoder(resp.Body).Decode(&errBody) //nolint:errcheck // best-effort decode for error message
 		return nil, fmt.Errorf("token refresh returned %d: %s", resp.StatusCode, errBody)
 	}
 

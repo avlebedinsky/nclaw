@@ -1,7 +1,7 @@
 package scheduler
 
 import (
-	"strings"
+	"context"
 	"testing"
 	"time"
 
@@ -11,9 +11,11 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
+	"github.com/nickalie/nclaw/internal/blocks"
+	"github.com/nickalie/nclaw/internal/chatqueue"
 	"github.com/nickalie/nclaw/internal/cli"
+	"github.com/nickalie/nclaw/internal/invoker"
 	"github.com/nickalie/nclaw/internal/model"
-	"github.com/nickalie/nclaw/internal/telegram"
 )
 
 // mockProvider implements cli.Provider for testing.
@@ -26,6 +28,13 @@ func (m *mockProvider) Version() (string, error) {
 }
 func (m *mockProvider) Name() string { return "mock" }
 
+type inlineRunner struct{}
+
+func (inlineRunner) Do(_ chatqueue.Key, job chatqueue.Job) error {
+	job.Fn(context.Background())
+	return nil
+}
+
 func setupTestScheduler(t *testing.T) *Scheduler {
 	t.Helper()
 	database, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{
@@ -34,28 +43,9 @@ func setupTestScheduler(t *testing.T) *Scheduler {
 	require.NoError(t, err)
 	require.NoError(t, database.AutoMigrate(&model.ScheduledTask{}, &model.TaskRunLog{}))
 
-	sched, err := New(database, &mockProvider{}, "UTC", t.TempDir(), telegram.NewChatLocker())
+	sched, err := New(database, invoker.New(&mockProvider{}, invoker.Options{DataDir: t.TempDir()}), inlineRunner{}, time.UTC)
 	require.NoError(t, err)
 	return sched
-}
-
-func TestScheduleBlockRegex(t *testing.T) {
-	input := "text\n```nclaw:schedule\n{\"action\":\"create\"}\n```\nmore"
-	matches := scheduleBlockRe.FindAllStringSubmatch(input, -1)
-	assert.Len(t, matches, 1)
-	assert.Equal(t, "{\"action\":\"create\"}", matches[0][1])
-}
-
-func TestScheduleBlockRegex_Multiple(t *testing.T) {
-	input := "```nclaw:schedule\n{\"action\":\"create\"}\n```\nmiddle\n```nclaw:schedule\n{\"action\":\"cancel\"}\n```"
-	matches := scheduleBlockRe.FindAllStringSubmatch(input, -1)
-	assert.Len(t, matches, 2)
-}
-
-func TestScheduleBlockRegex_NoMatch(t *testing.T) {
-	input := "just regular text\n```go\nfmt.Println(\"hello\")\n```"
-	matches := scheduleBlockRe.FindAllStringSubmatch(input, -1)
-	assert.Empty(t, matches)
 }
 
 func TestExecuteBlocks_CreateTask(t *testing.T) {
@@ -69,7 +59,7 @@ func TestExecuteBlocks_CreateTask(t *testing.T) {
 	errMsg := s.ExecuteBlocks(text, 100, 5)
 	assert.Empty(t, errMsg)
 
-	display := strings.TrimSpace(scheduleBlockRe.ReplaceAllString(text, ""))
+	display := blocks.StripAll(text)
 	assert.Contains(t, display, "I'll set that up.")
 	assert.Contains(t, display, "Done!")
 	assert.NotContains(t, display, "nclaw:schedule")
@@ -193,7 +183,7 @@ func TestTruncate(t *testing.T) {
 
 func TestFormatTaskList_Empty(t *testing.T) {
 	s := setupTestScheduler(t)
-	result := s.FormatTaskList(100, 0)
+	result := FormatTaskList(s.db, time.UTC, 100, 0)
 	assert.Equal(t, "Current scheduled tasks: none", result)
 }
 
@@ -215,7 +205,7 @@ func TestFormatTaskList_WithTasks(t *testing.T) {
 	}
 	require.NoError(t, s.db.Create(task).Error)
 
-	result := s.FormatTaskList(100, 0)
+	result := FormatTaskList(s.db, time.UTC, 100, 0)
 	assert.Contains(t, result, "Current scheduled tasks:")
 	assert.Contains(t, result, "task-123")
 	assert.Contains(t, result, "check weather")
@@ -240,6 +230,84 @@ func TestFormatTaskList_DifferentChat(t *testing.T) {
 	require.NoError(t, s.db.Create(task).Error)
 
 	// Should not appear for chat 100
-	result := s.FormatTaskList(100, 0)
+	result := FormatTaskList(s.db, time.UTC, 100, 0)
 	assert.Equal(t, "Current scheduled tasks: none", result)
+}
+
+func TestExecuteBlocks_TaskActionsRequireOwner(t *testing.T) {
+	cases := []struct {
+		name     string
+		chatID   int64
+		threadID int
+	}{
+		{"other chat", 200, 0},
+		{"other thread", 100, 5},
+	}
+	for _, tc := range cases {
+		for _, action := range []string{"pause", "resume", "cancel"} {
+			t.Run(tc.name+"/"+action, func(t *testing.T) {
+				s := setupTestScheduler(t)
+				task := &model.ScheduledTask{
+					ID: model.GenerateTaskID(), ChatID: 100, Prompt: "p",
+					ScheduleType: model.ScheduleInterval, ScheduleValue: "1h",
+					ContextMode: model.ContextGroup, Status: model.StatusPaused, CreatedAt: time.Now(),
+				}
+				require.NoError(t, s.db.Create(task).Error)
+
+				block := "```nclaw:schedule\n{\"action\":\"" + action + "\",\"task_id\":\"" + task.ID + "\"}\n```"
+				result := s.ExecuteBlocks(block, tc.chatID, tc.threadID)
+				assert.Contains(t, result, "task not found: "+task.ID)
+
+				var got model.ScheduledTask
+				require.NoError(t, s.db.First(&got, "id = ?", task.ID).Error)
+				assert.Equal(t, model.StatusPaused, got.Status)
+			})
+		}
+	}
+}
+
+func TestExecuteBlocks_TaskActionByOwner(t *testing.T) {
+	s := setupTestScheduler(t)
+	s.Start()
+	defer s.Shutdown()
+
+	task := &model.ScheduledTask{
+		ID: model.GenerateTaskID(), ChatID: 100, ThreadID: 5, Prompt: "p",
+		ScheduleType: model.ScheduleInterval, ScheduleValue: "1h",
+		ContextMode: model.ContextGroup, Status: model.StatusActive, CreatedAt: time.Now(),
+	}
+	require.NoError(t, s.CreateTask(task))
+
+	block := "```nclaw:schedule\n{\"action\":\"pause\",\"task_id\":\"" + task.ID + "\"}\n```"
+	assert.Empty(t, s.ExecuteBlocks(block, 100, 5))
+
+	var got model.ScheduledTask
+	require.NoError(t, s.db.First(&got, "id = ?", task.ID).Error)
+	assert.Equal(t, model.StatusPaused, got.Status)
+}
+
+func TestExecuteBlocks_TaskActionUnknownTask(t *testing.T) {
+	s := setupTestScheduler(t)
+	result := s.ExecuteBlocks("```nclaw:schedule\n{\"action\":\"cancel\",\"task_id\":\"task-missing\"}\n```", 100, 0)
+	assert.Contains(t, result, "task not found: task-missing")
+}
+
+func TestFormatTaskList_HidesFinishedTasks(t *testing.T) {
+	s := setupTestScheduler(t)
+	for id, status := range map[string]string{
+		"task-active": model.StatusActive, "task-paused": model.StatusPaused,
+		"task-done": model.StatusCompleted, "task-failed": model.StatusFailed,
+	} {
+		require.NoError(t, s.db.Create(&model.ScheduledTask{
+			ID: id, ChatID: 100, Prompt: "p", ScheduleType: model.ScheduleOnce, ScheduleValue: "2026-01-01T00:00:00",
+			ContextMode: model.ContextGroup, Status: status, CreatedAt: time.Now(),
+		}).Error)
+	}
+
+	result := FormatTaskList(s.db, time.UTC, 100, 0)
+
+	assert.Contains(t, result, "task-active")
+	assert.Contains(t, result, "task-paused")
+	assert.NotContains(t, result, "task-done")
+	assert.NotContains(t, result, "task-failed")
 }

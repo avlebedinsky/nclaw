@@ -2,12 +2,15 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
@@ -19,6 +22,8 @@ type attachment struct {
 	fileUniqueID string
 	fileSize     int64
 	filename     string
+	speech       bool
+	duration     int
 }
 
 // extractAttachment returns file info if the message contains a file, or nil otherwise.
@@ -43,7 +48,8 @@ func extractMedia(msg *models.Message) *attachment {
 		return &attachment{fileID: a.FileID, fileUniqueID: a.FileUniqueID, fileSize: a.FileSize, filename: nameOr(a.FileName, "audio.ogg")}
 	case msg.Voice != nil:
 		v := msg.Voice
-		return &attachment{fileID: v.FileID, fileUniqueID: v.FileUniqueID, fileSize: v.FileSize, filename: "voice.ogg"}
+		return &attachment{fileID: v.FileID, fileUniqueID: v.FileUniqueID, fileSize: v.FileSize, filename: "voice.ogg",
+			speech: true, duration: v.Duration}
 	default:
 		return nil
 	}
@@ -58,7 +64,7 @@ func extractExtra(msg *models.Message) *attachment {
 	case msg.VideoNote != nil:
 		v := msg.VideoNote
 		return &attachment{fileID: v.FileID, fileUniqueID: v.FileUniqueID, fileSize: int64(v.FileSize),
-			filename: "video_note.mp4"}
+			filename: "video_note.mp4", speech: true, duration: v.Duration}
 	case msg.Animation != nil:
 		a := msg.Animation
 		return &attachment{fileID: a.FileID, fileUniqueID: a.FileUniqueID, fileSize: a.FileSize,
@@ -81,7 +87,7 @@ func nameOr(name, fallback string) string {
 
 // downloadAttachment fetches a file from Telegram and saves it into dir. Returns the local path.
 func downloadAttachment(ctx context.Context, b *bot.Bot, att *attachment, dir string) (string, error) {
-	localPath := filepath.Join(dir, filepath.Base(att.filename))
+	localPath := filepath.Join(dir, localName(att))
 
 	if isCached(localPath, att) {
 		log.Printf("handler: file %s already cached, skipping download", localPath)
@@ -93,10 +99,9 @@ func downloadAttachment(ctx context.Context, b *bot.Bot, att *attachment, dir st
 		return "", fmt.Errorf("get file: %w", err)
 	}
 
-	link := b.FileDownloadLink(f)
-	log.Printf("handler: downloading file %s from %s", att.filename, link)
+	log.Printf("handler: downloading file %s (%s) to %s", att.filename, f.FilePath, localPath)
 
-	if err := fetchToFile(ctx, link, localPath); err != nil {
+	if err := fetchToFile(ctx, b.FileDownloadLink(f), localPath); err != nil {
 		return "", fmt.Errorf("download %s: %w", att.filename, err)
 	}
 
@@ -117,7 +122,7 @@ func isCached(localPath string, att *attachment) bool {
 	}
 
 	if att.fileUniqueID != "" {
-		stored, _ := os.ReadFile(localPath + ".uid")
+		stored, _ := os.ReadFile(localPath + ".uid") //nolint:errcheck // missing sidecar file means cache miss
 		if string(stored) != att.fileUniqueID {
 			return false
 		}
@@ -135,30 +140,67 @@ func writeUID(localPath, uid string) {
 	}
 }
 
-func fetchToFile(ctx context.Context, url, dst string) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
+func fetchToFile(ctx context.Context, link, dst string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, link, http.NoBody)
 	if err != nil {
-		return err
+		return errors.New("invalid download request")
 	}
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return err
+		return withoutURL(err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck // response body already read
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("unexpected status %d", resp.StatusCode)
 	}
 
-	out, err := os.Create(dst)
+	return writeAtomically(dst, resp.Body)
+}
+
+func withoutURL(err error) error {
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		return urlErr.Err
+	}
+	return err
+}
+
+func writeAtomically(dst string, r io.Reader) error {
+	tmp, err := os.CreateTemp(filepath.Dir(dst), filepath.Base(dst)+".*.part")
 	if err != nil {
 		return err
 	}
 
-	if _, err = io.Copy(out, resp.Body); err != nil {
-		out.Close()
+	_, copyErr := io.Copy(tmp, r)
+	closeErr := tmp.Close()
+	if err := errors.Join(copyErr, closeErr); err != nil {
+		removeFile(tmp.Name())
 		return err
 	}
-	return out.Close()
+
+	if err := os.Rename(tmp.Name(), dst); err != nil {
+		removeFile(tmp.Name())
+		return err
+	}
+	return nil
+}
+
+func removeFile(path string) {
+	if err := os.Remove(path); err != nil {
+		log.Printf("handler: remove %s: %v", path, err)
+	}
+}
+
+func localName(att *attachment) string {
+	base := filepath.Base(att.filename)
+	if base == "." || base == ".." || base == string(filepath.Separator) {
+		base = "file"
+	}
+	if att.fileUniqueID == "" {
+		return base
+	}
+	ext := filepath.Ext(base)
+	return strings.TrimSuffix(base, ext) + "_" + att.fileUniqueID + ext
 }

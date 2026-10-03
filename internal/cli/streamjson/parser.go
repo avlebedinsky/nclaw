@@ -1,10 +1,8 @@
 package streamjson
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
-	"log"
 	"strings"
 
 	"github.com/nickalie/nclaw/internal/cli"
@@ -24,14 +22,24 @@ type assistantMessage struct {
 
 // contentBlock represents a single content block in an assistant message.
 type contentBlock struct {
-	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
+	Type  string          `json:"type"`
+	Text  string          `json:"text,omitempty"`
+	Name  string          `json:"name,omitempty"`
+	Input json.RawMessage `json:"input,omitempty"`
 }
 
 // ParseOutput parses stream-json (NDJSON) output and extracts all assistant
 // text and the final result into a cli.Result.
 func ParseOutput(output []byte) *cli.Result {
-	allText, resultText := collectStreamEvents(output)
+	w := NewStreamWriter(nil)
+	w.feed(output)
+	return w.Result()
+}
+
+// assembleResult builds a cli.Result from collected assistant texts and the
+// final result-event text, applying the fallbacks shared by ParseOutput and
+// StreamWriter.Result.
+func assembleResult(allText []string, resultText string) *cli.Result {
 	fullText := strings.Join(allText, "\n")
 
 	if resultText == "" {
@@ -42,62 +50,134 @@ func ParseOutput(output []byte) *cli.Result {
 		fullText = resultText
 	}
 
-	if resultText == "" && len(allText) == 0 {
-		text := strings.TrimSpace(string(output))
+	return &cli.Result{Text: resultText, FullText: fullText, Messages: allText}
+}
+
+// StreamWriter is an io.Writer that parses stream-json (NDJSON) output
+// incrementally as it is written, invoking onMessage for each complete assistant
+// message and accumulating the parsed result. Result assembles the final
+// cli.Result from the accumulated state, so each line is parsed exactly once.
+type StreamWriter struct {
+	onMessage  func(string)
+	onTool     cli.ToolHandler
+	pending    []byte
+	raw        bytes.Buffer
+	messages   []string
+	resultText string
+}
+
+// NewStreamWriter creates a StreamWriter that calls onMessage for each assistant
+// message as it streams in. onMessage may be nil, in which case the writer only
+// accumulates output for a final Result.
+func NewStreamWriter(onMessage func(string)) *StreamWriter {
+	return &StreamWriter{onMessage: onMessage}
+}
+
+// WithToolHandler makes the writer report every tool call to h as it streams in.
+func (w *StreamWriter) WithToolHandler(h cli.ToolHandler) *StreamWriter {
+	w.onTool = h
+	return w
+}
+
+// Write captures raw bytes and processes complete NDJSON lines. It always reports
+// the full length as written so the process is never blocked.
+func (w *StreamWriter) Write(p []byte) (int, error) {
+	w.feed(p)
+	return len(p), nil
+}
+
+func (w *StreamWriter) feed(p []byte) {
+	w.raw.Write(p)
+	w.pending = append(w.pending, p...)
+
+	for {
+		i := bytes.IndexByte(w.pending, '\n')
+		if i < 0 {
+			break
+		}
+		line := w.pending[:i]
+		w.pending = w.pending[i+1:]
+		w.handleLine(line)
+	}
+}
+
+// Bytes returns all raw output written so far, used for error fallback text.
+func (w *StreamWriter) Bytes() []byte {
+	return w.raw.Bytes()
+}
+
+// Result flushes any unterminated final line and assembles the complete
+// cli.Result from the accumulated assistant messages and result text.
+func (w *StreamWriter) Result() *cli.Result {
+	if len(w.pending) > 0 {
+		w.handleLine(w.pending)
+		w.pending = nil
+	}
+
+	if w.resultText == "" && len(w.messages) == 0 {
+		text := strings.TrimSpace(w.raw.String())
 		return &cli.Result{Text: text, FullText: text}
 	}
 
-	return &cli.Result{Text: resultText, FullText: fullText}
+	return assembleResult(w.messages, w.resultText)
 }
 
-func collectStreamEvents(output []byte) (allText []string, resultText string) {
-	scanner := bufio.NewScanner(bytes.NewReader(output))
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
-		}
-
-		var event streamEvent
-		if err := json.Unmarshal(line, &event); err != nil {
-			continue
-		}
-
-		switch event.Type {
-		case "assistant":
-			if text := extractAssistantText(event.Message); text != "" {
-				allText = append(allText, text)
-			}
-		case "result":
-			resultText = event.Result
-		}
+// handleLine parses a single NDJSON line, accumulating assistant text (also
+// emitted live via onMessage) and the final result text.
+func (w *StreamWriter) handleLine(line []byte) {
+	if len(line) == 0 {
+		return
 	}
 
-	if err := scanner.Err(); err != nil {
-		log.Printf("streamjson: scan error (output may be truncated): %v", err)
+	var event streamEvent
+	if err := json.Unmarshal(line, &event); err != nil {
+		return
 	}
 
-	return allText, resultText
+	switch event.Type {
+	case "assistant":
+		w.handleAssistant(event.Message)
+	case "result":
+		w.resultText = event.Result
+	}
 }
 
-func extractAssistantText(msg json.RawMessage) string {
+func (w *StreamWriter) handleAssistant(raw json.RawMessage) {
+	text, tools := parseAssistant(raw)
+	if text != "" {
+		w.messages = append(w.messages, text)
+		if w.onMessage != nil {
+			w.onMessage(text)
+		}
+	}
+	if w.onTool == nil {
+		return
+	}
+	for _, ev := range tools {
+		w.onTool(ev)
+	}
+}
+
+func parseAssistant(msg json.RawMessage) (string, []cli.ToolEvent) {
 	if len(msg) == 0 {
-		return ""
+		return "", nil
 	}
 
 	var message assistantMessage
 	if err := json.Unmarshal(msg, &message); err != nil {
-		return ""
+		return "", nil
 	}
 
 	var parts []string
+	var tools []cli.ToolEvent
 	for _, block := range message.Content {
-		if block.Type == "text" && block.Text != "" {
+		switch {
+		case block.Type == "text" && block.Text != "":
 			parts = append(parts, block.Text)
+		case block.Type == "tool_use":
+			tools = append(tools, toolEvent(block.Name, block.Input))
 		}
 	}
 
-	return strings.Join(parts, "\n")
+	return strings.Join(parts, "\n"), tools
 }

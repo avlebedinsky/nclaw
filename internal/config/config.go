@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"path/filepath"
@@ -19,7 +20,7 @@ var requiredKeys = []string{
 
 // Init loads configuration from files and environment variables.
 func Init() error {
-	_ = godotenv.Load()
+	godotenv.Load() //nolint:errcheck // .env is optional; absence is not an error
 
 	viper.SetConfigName("config")
 	viper.SetConfigType("yaml")
@@ -30,7 +31,8 @@ func Init() error {
 	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 
 	if err := viper.ReadInConfig(); err != nil {
-		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
+		var notFound viper.ConfigFileNotFoundError
+		if !errors.As(err, &notFound) {
 			return err
 		}
 	}
@@ -66,6 +68,59 @@ func WhitelistChatIDs() []int64 {
 		}
 	}
 	return ids
+}
+
+// StartupNotification reports whether the bot should send a startup
+// notification message to whitelisted chats (env: NCLAW_STARTUP_NOTIFICATION).
+// Disabled by default.
+func StartupNotification() bool {
+	return viper.GetBool("startup_notification")
+}
+
+// Progress reports whether a status message tracking the agent's tool calls is shown
+// while a request runs (env: NCLAW_PROGRESS). Enabled by default.
+func Progress() bool {
+	if !viper.IsSet("progress") {
+		return true
+	}
+	return viper.GetBool("progress")
+}
+
+// StreamMessages reports whether every assistant message from the CLI's JSON
+// stream should be sent as a separate Telegram reply (env: NCLAW_STREAM_MESSAGES).
+// When disabled (default), only the final message is sent.
+func StreamMessages() bool {
+	return viper.GetBool("stream_messages")
+}
+
+// BundledSkillsDir returns the directory holding the skills shipped with the image
+// (env: NCLAW_BUNDLED_SKILLS_DIR, default /opt/nclaw-skills).
+func BundledSkillsDir() string {
+	if dir := viper.GetString("bundled_skills_dir"); dir != "" {
+		return dir
+	}
+	return "/opt/nclaw-skills"
+}
+
+// WhisperBin returns the whisper.cpp CLI used for voice transcription (env: NCLAW_WHISPER_BIN, default whisper-cli).
+func WhisperBin() string {
+	if bin := viper.GetString("whisper.bin"); bin != "" {
+		return bin
+	}
+	return "whisper-cli"
+}
+
+// WhisperModel returns the ggml Whisper model path; empty disables transcription (env: NCLAW_WHISPER_MODEL).
+func WhisperModel() string {
+	return viper.GetString("whisper.model")
+}
+
+// WhisperLanguage returns the spoken-language hint for Whisper (env: NCLAW_WHISPER_LANGUAGE, default auto).
+func WhisperLanguage() string {
+	if lang := viper.GetString("whisper.language"); lang != "" {
+		return lang
+	}
+	return "auto"
 }
 
 // DataDir returns the configured data directory path.
@@ -127,6 +182,11 @@ func ValidCLIBackends() []string {
 	return []string{"claude", "claudish", "codex", "copilot", "gemini"}
 }
 
+// ClaudeExecPath returns the configured full path to the Claude CLI binary (env: NCLAW_CLAUDE_EXEC_PATH).
+func ClaudeExecPath() string {
+	return viper.GetString("claude_exec_path")
+}
+
 // Model returns the configured model name (env: NCLAW_MODEL).
 func Model() string {
 	return viper.GetString("model")
@@ -155,6 +215,36 @@ func ModelSubagent() string {
 // CopilotModel returns the model for the Copilot CLI backend (env: NCLAW_COPILOT_MODEL).
 func CopilotModel() string {
 	return viper.GetString("copilot_model")
+}
+
+const defaultCLITimeout = 60 * time.Minute
+
+// CLITimeout returns the maximum duration of one CLI run (env: NCLAW_CLI_TIMEOUT).
+// A bare number is read as seconds, 0 disables the limit, and the default is 60 minutes.
+func CLITimeout() time.Duration {
+	raw := strings.TrimSpace(viper.GetString("cli_timeout"))
+	if raw == "" {
+		return defaultCLITimeout
+	}
+	if n, err := strconv.Atoi(raw); err == nil && n >= 0 {
+		return time.Duration(n) * time.Second
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d < 0 {
+		log.Printf("config: invalid cli_timeout %q, using %s", raw, defaultCLITimeout)
+		return defaultCLITimeout
+	}
+	return d
+}
+
+// Location returns the configured timezone, falling back to the system local zone when it is invalid.
+func Location() *time.Location {
+	loc, err := time.LoadLocation(Timezone())
+	if err != nil {
+		log.Printf("config: invalid timezone %q, falling back to local: %v", Timezone(), err)
+		return time.Local
+	}
+	return loc
 }
 
 // Timezone returns the configured timezone name, defaulting to system local.

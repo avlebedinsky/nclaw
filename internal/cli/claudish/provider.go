@@ -1,6 +1,9 @@
 package claudish
 
-import "github.com/nickalie/nclaw/internal/cli"
+import (
+	"github.com/nickalie/nclaw/internal/cli"
+	"github.com/nickalie/nclaw/internal/cli/claude"
+)
 
 // Provider implements cli.Provider for the claudish CLI backend.
 type Provider struct {
@@ -11,8 +14,12 @@ type Provider struct {
 	modelSubagent string
 }
 
-// Compile-time check: *Provider implements cli.Provider.
-var _ cli.Provider = (*Provider)(nil)
+// Compile-time checks: *Provider implements cli.Provider and its optional capabilities.
+var (
+	_ cli.Provider             = (*Provider)(nil)
+	_ cli.NativeSkillsProvider = (*Provider)(nil)
+	_ cli.SessionStore         = (*Provider)(nil)
+)
 
 // NewProvider creates a new claudish CLI provider with model configuration.
 func NewProvider(model, modelOpus, modelSonnet, modelHaiku, modelSubagent string) *Provider {
@@ -49,4 +56,19 @@ func (p *Provider) Version() (string, error) {
 // Name returns the backend name.
 func (p *Provider) Name() string {
 	return "claudish"
+}
+
+// NativeSkills reports that the CLI loads skills from its own skills directory.
+func (p *Provider) NativeSkills() bool {
+	return true
+}
+
+// SessionSize returns the size of the latest session transcript for dir.
+func (p *Provider) SessionSize(dir string) (int64, bool) {
+	return claude.SessionSize(dir)
+}
+
+// ArchiveSession archives the session history for dir so the next run starts fresh.
+func (p *Provider) ArchiveSession(dir string) error {
+	return claude.ArchiveSession(dir)
 }

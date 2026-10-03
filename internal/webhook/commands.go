@@ -4,13 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"regexp"
 	"strings"
 
+	"github.com/nickalie/nclaw/internal/blocks"
 	"github.com/nickalie/nclaw/internal/db"
 )
-
-var webhookBlockRe = regexp.MustCompile("(?s)```nclaw:webhook\n(.*?)\n```")
 
 type webhookCommand struct {
 	Action      string `json:"action"`
@@ -21,7 +19,7 @@ type webhookCommand struct {
 // ExecuteBlocks extracts nclaw:webhook code blocks from text, executes them,
 // and returns any status/error messages. Does not modify the input text.
 func (m *Manager) ExecuteBlocks(text string, chatID int64, threadID int) string {
-	matches := webhookBlockRe.FindAllStringSubmatch(text, -1)
+	matches := blocks.Webhook.FindAllStringSubmatch(text, -1)
 	if len(matches) == 0 {
 		return ""
 	}

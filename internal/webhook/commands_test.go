@@ -2,7 +2,7 @@ package webhook
 
 import (
 	"context"
-	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -11,32 +11,66 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
+	"github.com/nickalie/nclaw/internal/blocks"
+	"github.com/nickalie/nclaw/internal/chatqueue"
 	"github.com/nickalie/nclaw/internal/cli"
+	"github.com/nickalie/nclaw/internal/invoker"
 	"github.com/nickalie/nclaw/internal/model"
 	"github.com/nickalie/nclaw/internal/pipeline"
 	"github.com/nickalie/nclaw/internal/sendfile"
 	"github.com/nickalie/nclaw/internal/telegram"
 )
 
-// mockProvider implements cli.Provider for testing.
-type mockProvider struct{}
+type mockProvider struct {
+	client *mockClient
+}
 
-func (m *mockProvider) NewClient() cli.Client    { return &mockClient{} }
+func (m *mockProvider) NewClient() cli.Client {
+	if m.client == nil {
+		m.client = &mockClient{}
+	}
+	return m.client
+}
 func (m *mockProvider) PreInvoke() error         { return nil }
 func (m *mockProvider) Version() (string, error) { return "mock-1.0.0", nil }
 func (m *mockProvider) Name() string             { return "mock" }
 
-// mockClient implements cli.Client for testing.
-type mockClient struct{}
+type mockClient struct {
+	mu           sync.Mutex
+	systemPrompt string
+	query        string
+}
 
-func (m *mockClient) Dir(string) cli.Client                { return m }
-func (m *mockClient) SkipPermissions() cli.Client          { return m }
-func (m *mockClient) AppendSystemPrompt(string) cli.Client { return m }
-func (m *mockClient) Ask(string) (*cli.Result, error) {
+func (m *mockClient) Dir(string) cli.Client              { return m }
+func (m *mockClient) Context(context.Context) cli.Client { return m }
+func (m *mockClient) SkipPermissions() cli.Client        { return m }
+func (m *mockClient) AppendSystemPrompt(p string) cli.Client {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.systemPrompt = p
+	return m
+}
+func (m *mockClient) Ask(q string) (*cli.Result, error) { return m.Continue(q) }
+func (m *mockClient) Continue(q string) (*cli.Result, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.query = q
 	return &cli.Result{Text: "mock response", FullText: "mock response"}, nil
 }
-func (m *mockClient) Continue(string) (*cli.Result, error) {
-	return &cli.Result{Text: "mock response", FullText: "mock response"}, nil
+
+type inlineRunner struct{}
+
+func (inlineRunner) Do(_ chatqueue.Key, job chatqueue.Job) error {
+	job.Fn(context.Background())
+	return nil
+}
+
+func newTestInvoker(t *testing.T, p cli.Provider) *invoker.Invoker {
+	t.Helper()
+	return invoker.New(p, invoker.Options{
+		DataDir:  t.TempDir(),
+		TaskList: func(int64, int) string { return "Current scheduled tasks: none" },
+	})
 }
 
 func noopSend(_ context.Context, _ int64, _ int, _, _ string) error { return nil }
@@ -49,28 +83,9 @@ func setupTestManager(t *testing.T) *Manager {
 	require.NoError(t, err)
 	require.NoError(t, database.AutoMigrate(&model.WebhookRegistration{}))
 
-	mgr := NewManager(database, &mockProvider{}, "example.com", t.TempDir(), telegram.NewChatLocker())
+	mgr := NewManager(database, newTestInvoker(t, &mockProvider{}), inlineRunner{}, "example.com")
 	mgr.SetPipeline(pipeline.New(noopSend, sendfile.Senders{}, true))
 	return mgr
-}
-
-func TestWebhookBlockRegex(t *testing.T) {
-	input := "text\n```nclaw:webhook\n{\"action\":\"create\"}\n```\nmore"
-	matches := webhookBlockRe.FindAllStringSubmatch(input, -1)
-	assert.Len(t, matches, 1)
-	assert.Equal(t, "{\"action\":\"create\"}", matches[0][1])
-}
-
-func TestWebhookBlockRegex_Multiple(t *testing.T) {
-	input := "```nclaw:webhook\n{\"action\":\"create\"}\n```\nmid\n```nclaw:webhook\n{\"action\":\"list\"}\n```"
-	matches := webhookBlockRe.FindAllStringSubmatch(input, -1)
-	assert.Len(t, matches, 2)
-}
-
-func TestWebhookBlockRegex_NoMatch(t *testing.T) {
-	input := "just text\n```go\nfmt.Println(\"hello\")\n```"
-	matches := webhookBlockRe.FindAllStringSubmatch(input, -1)
-	assert.Empty(t, matches)
 }
 
 func TestExecuteBlocks_CreateWebhookFull(t *testing.T) {
@@ -81,7 +96,7 @@ func TestExecuteBlocks_CreateWebhookFull(t *testing.T) {
 	statusMsg := m.ExecuteBlocks(text, 100, 5)
 	assert.Contains(t, statusMsg, "[Webhook created: https://example.com/webhooks/")
 
-	display := strings.TrimSpace(webhookBlockRe.ReplaceAllString(text, ""))
+	display := blocks.StripAll(text)
 	assert.Contains(t, display, "Setting up.")
 	assert.Contains(t, display, "Done!")
 	assert.NotContains(t, display, "nclaw:webhook")
@@ -400,33 +415,6 @@ func TestHandleIncoming_Busy(t *testing.T) {
 	}
 }
 
-func TestSplitMessage_Short(t *testing.T) {
-	chunks := telegram.SplitMessage("hello", 100)
-	assert.Equal(t, []string{"hello"}, chunks)
-}
-
-func TestSplitMessage_ExactLimit(t *testing.T) {
-	text := "aaaaaaaaaa" // 10 chars
-	chunks := telegram.SplitMessage(text, 10)
-	assert.Equal(t, []string{text}, chunks)
-}
-
-func TestSplitMessage_SplitsAtNewline(t *testing.T) {
-	text := "aaaaa\nbbbbb" // 5 + newline + 5
-	chunks := telegram.SplitMessage(text, 6)
-	assert.Len(t, chunks, 2)
-	assert.Equal(t, "aaaaa", chunks[0])
-	assert.Equal(t, "bbbbb", chunks[1])
-}
-
-func TestSplitMessage_NoNewline(t *testing.T) {
-	text := "aaaaaaaaaabbbbbbbbbb" // 20 chars
-	chunks := telegram.SplitMessage(text, 10)
-	assert.Len(t, chunks, 2)
-	assert.Equal(t, "aaaaaaaaaa", chunks[0])
-	assert.Equal(t, "bbbbbbbbbb", chunks[1])
-}
-
 func TestExecuteBlocks_PauseTask(t *testing.T) {
 	m := setupTestManager(t)
 
@@ -598,4 +586,27 @@ func TestBuildIncomingPrompt_EmptyQuery(t *testing.T) {
 
 	prompt := buildIncomingPrompt(wh, req)
 	assert.NotContains(t, prompt, "Query Parameters:")
+}
+
+func TestProcessIncoming_UsesSharedPromptAndDeliversReply(t *testing.T) {
+	database, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	require.NoError(t, err)
+	require.NoError(t, database.AutoMigrate(&model.WebhookRegistration{}))
+
+	provider := &mockProvider{}
+	m := NewManager(database, newTestInvoker(t, provider), inlineRunner{}, "example.com")
+	var sent []string
+	m.SetPipeline(pipeline.New(func(_ context.Context, _ int64, _ int, text, _ string) error {
+		sent = append(sent, text)
+		return nil
+	}, sendfile.Senders{}, true))
+
+	wh, err := m.Create("GitHub push", 100, 5)
+	require.NoError(t, err)
+	m.processIncoming(wh, IncomingRequest{Method: "POST", Body: `{"ref":"main"}`})
+
+	assert.Equal(t, []string{"mock response"}, sent)
+	assert.Contains(t, provider.client.systemPrompt, telegram.Prompt)
+	assert.Contains(t, provider.client.systemPrompt, "Current scheduled tasks: none")
+	assert.Contains(t, provider.client.query, `Body:`+"\n"+`{"ref":"main"}`)
 }

@@ -8,7 +8,6 @@ require (
 	github.com/gofiber/fiber/v2 v2.52.12
 	github.com/google/uuid v1.6.0
 	github.com/joho/godotenv v1.5.1
-	github.com/nickalie/go-binwrapper v0.0.0-20260217210324-ce887a3b6d18
 	github.com/spf13/viper v1.21.0
 	github.com/stretchr/testify v1.11.1
 	gorm.io/driver/sqlite v1.6.0

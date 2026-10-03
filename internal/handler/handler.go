@@ -2,78 +2,141 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
 
+	"github.com/nickalie/nclaw/internal/chatqueue"
 	"github.com/nickalie/nclaw/internal/cli"
 	"github.com/nickalie/nclaw/internal/config"
+	"github.com/nickalie/nclaw/internal/invoker"
 	"github.com/nickalie/nclaw/internal/pipeline"
-	"github.com/nickalie/nclaw/internal/scheduler"
-	"github.com/nickalie/nclaw/internal/telegram"
+	"github.com/nickalie/nclaw/internal/progress"
 )
+
+const maxSpeechSeconds = 600
 
 // Handler processes incoming Telegram messages.
 type Handler struct {
-	Provider   cli.Provider
-	Scheduler  *scheduler.Scheduler
-	Pipeline   *pipeline.Pipeline
-	ChatLocker *telegram.ChatLocker
+	Invoker     *invoker.Invoker
+	Pipeline    *pipeline.Pipeline
+	Queue       *chatqueue.Queue[Inbound]
+	Bot         *bot.Bot
+	BotUsername string
+	Send        pipeline.SendFunc
+	Progress    progress.MessageAPI
+	Transcriber Transcriber
 }
 
-// Default handles incoming messages by forwarding them to Claude Code.
-func (h *Handler) Default(parentCtx context.Context, b *bot.Bot, update *models.Update) {
-	if update.Message == nil {
-		return
-	}
+// Transcriber turns a downloaded voice message or video note into text.
+type Transcriber interface {
+	Transcribe(ctx context.Context, path string) (string, error)
+}
 
+// AllowChat is bot middleware that drops updates without a message or from chats
+// outside the whitelist.
+func AllowChat(next bot.HandlerFunc) bot.HandlerFunc {
+	return func(ctx context.Context, b *bot.Bot, update *models.Update) {
+		if update.Message == nil {
+			return
+		}
+		if !isChatAllowed(update.Message.Chat.ID) {
+			log.Printf("handler: ignoring message from non-whitelisted chat=%d", update.Message.Chat.ID)
+			return
+		}
+		next(ctx, b, update)
+	}
+}
+
+// Default queues an incoming message for its chat; it never blocks on the CLI.
+func (h *Handler) Default(_ context.Context, _ *bot.Bot, update *models.Update) {
 	msg := update.Message
-
-	if !isChatAllowed(msg.Chat.ID) {
-		log.Printf("handler: ignoring message from non-whitelisted chat=%d", msg.Chat.ID)
+	if msg == nil {
+		return
+	}
+	if _, forMe, isCmd := parseCommand(msg.Text, h.BotUsername); isCmd && !forMe {
 		return
 	}
 
-	text, att := resolveContent(msg)
-	if text == "" && att == nil {
+	in, ok := newInbound(msg)
+	if !ok {
 		log.Printf("handler: skipping update (no text or attachment)")
 		return
 	}
 
-	go h.processMessage(parentCtx, b, msg, text, att)
+	key := chatqueue.Key{ChatID: msg.Chat.ID, ThreadID: msg.MessageThreadID}
+	if err := h.Queue.Enqueue(key, in, settleFor(msg)); err != nil {
+		log.Printf("handler: chat=%d thread=%d message not queued: %v", key.ChatID, key.ThreadID, err)
+	}
 }
 
-func (h *Handler) processMessage(ctx context.Context, b *bot.Bot, msg *models.Message, text string, att *attachment) {
-	text = withReplyContext(msg, text)
-
-	chatID := msg.Chat.ID
-	threadID := msg.MessageThreadID
-	dir := telegram.ChatDir(config.DataDir(), chatID, threadID)
+// RunBatch answers a batch of queued messages from one chat with a single CLI run.
+func (h *Handler) RunBatch(ctx context.Context, key chatqueue.Key, batch []Inbound) {
+	dir := h.Invoker.ChatDir(key.ChatID, key.ThreadID)
 	ensureDir(dir)
 
 	typingCtx, stopTyping := context.WithCancel(ctx)
 	defer stopTyping()
+	go sendTyping(typingCtx, h.Bot, key.ChatID, key.ThreadID)
 
-	go sendTyping(typingCtx, b, chatID, threadID)
+	prompt := h.composePrompt(ctx, dir, batch)
+	log.Printf("handler: running %d message(s) for chat=%d thread=%d prompt_len=%d", len(batch), key.ChatID, key.ThreadID, len(prompt))
 
-	prompt := buildPrompt(ctx, b, text, att, dir)
-	log.Printf("handler: received message from chat=%d thread=%d text=%q hasFile=%v", chatID, threadID, text, att != nil)
-
-	unlock := h.ChatLocker.Lock(chatID, threadID)
-	result, cliErr := h.callCLI(dir, prompt, chatID, threadID)
-	unlock()
+	var stream *pipeline.StreamState
+	reporter := h.newReporter(key)
+	out := h.Invoker.Run(ctx, invoker.Request{
+		ChatID:   key.ChatID,
+		ThreadID: key.ThreadID,
+		Prompt:   prompt,
+		Configure: func(c cli.Client) {
+			stream = h.Pipeline.AttachStream(ctx, c, key.ChatID, key.ThreadID)
+			if pc, ok := c.(cli.ProgressClient); ok && reporter != nil {
+				pc.OnToolUse(reporter.OnTool)
+			}
+		},
+	})
 	stopTyping()
+	reporter.Finish(context.WithoutCancel(ctx))
 
-	if result == nil {
-		result = &cli.Result{}
+	if errors.Is(out.Err, chatqueue.ErrStopped) || errors.Is(out.Err, chatqueue.ErrShuttingDown) {
+		log.Printf("handler: run for chat=%d thread=%d interrupted: %v", key.ChatID, key.ThreadID, out.Err)
+		return
 	}
-	h.Pipeline.Process(ctx, result, cliErr, chatID, threadID, dir)
+
+	deliverCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	h.Pipeline.Process(deliverCtx, withErrorText(out.Result, out.Err), out.Err, key.ChatID, key.ThreadID, out.Dir, stream.Streamed())
+}
+
+func (h *Handler) newReporter(key chatqueue.Key) *progress.Reporter {
+	if h.Progress == nil {
+		return nil
+	}
+	return progress.New(h.Progress, key.ChatID, key.ThreadID, progress.Options{})
+}
+
+func withErrorText(result *cli.Result, err error) *cli.Result {
+	var timeout *invoker.TimeoutError
+	switch {
+	case err == nil:
+		return result
+	case errors.As(err, &timeout):
+		notice := fmt.Sprintf("⏱ Stopped: the run took longer than %s.", timeout.After)
+		text := strings.TrimSpace(result.Text + "\n\n" + notice)
+		return &cli.Result{Text: text, FullText: result.FullText}
+	case result.Text != "":
+		return result
+	default:
+		text := "error: " + err.Error()
+		return &cli.Result{Text: text, FullText: text}
+	}
 }
 
 // resolveContent extracts text and attachment from a message, falling back to reply attachment.
@@ -117,16 +180,21 @@ func messageContent(msg *models.Message) (string, *attachment) {
 	return text, att
 }
 
-// buildPrompt constructs the prompt for Claude, downloading any attachment first.
-func buildPrompt(ctx context.Context, b *bot.Bot, text string, att *attachment, dir string) string {
+func (h *Handler) buildPrompt(ctx context.Context, text string, att *attachment, dir string) string {
 	if att == nil {
 		return text
 	}
 
-	localPath, err := downloadAttachment(ctx, b, att, dir)
+	localPath, err := downloadAttachment(ctx, h.Bot, att, dir)
 	if err != nil {
 		log.Printf("handler: download error: %v", err)
 		return text + "\n\n(file attachment failed to download: " + err.Error() + ")"
+	}
+
+	if transcript := h.transcribe(ctx, att, localPath); transcript != "" {
+		return joinNonEmpty("[Voice message, transcribed]: "+transcript,
+			"(Transcribed locally from "+localPath+". Treat the text above as my message; the audio does not need to be transcribed again.)",
+			text)
 	}
 
 	prompt := fmt.Sprintf("I'm sending you a file: %s (saved at %s). Please read it.\n\n", att.filename, localPath)
@@ -137,69 +205,19 @@ func buildPrompt(ctx context.Context, b *bot.Bot, text string, att *attachment, 
 	return prompt
 }
 
-func (h *Handler) callCLI(dir, prompt string, chatID int64, threadID int) (*cli.Result, error) {
-	taskPrompt := h.Scheduler.FormatTaskList(chatID, threadID)
-	systemPrompt := telegram.Prompt + "\n\n" + taskPrompt
-
-	if h.Provider.Name() != "claude" && h.Provider.Name() != "claudish" {
-		skillsDir := filepath.Join(os.Getenv("HOME"), ".claude", "skills")
-		if skills := loadSkillsPrompt(skillsDir); skills != "" {
-			systemPrompt += "\n\n" + skills
-		}
+func (h *Handler) transcribe(ctx context.Context, att *attachment, path string) string {
+	if h.Transcriber == nil || !att.speech || att.duration > maxSpeechSeconds {
+		return ""
 	}
 
-	if err := h.Provider.PreInvoke(); err != nil {
-		log.Printf("handler: pre-invoke warning: %v", err)
-	}
-
-	h.maybeResetSession(dir)
-
-	log.Printf("handler: calling %s Continue in dir=%s", h.Provider.Name(), dir)
-	result, err := h.Provider.NewClient().Dir(dir).SkipPermissions().AppendSystemPrompt(systemPrompt).Continue(prompt)
-
+	start := time.Now()
+	text, err := h.Transcriber.Transcribe(ctx, path)
 	if err != nil {
-		log.Printf("handler: %s error: %v", h.Provider.Name(), err)
-		if result == nil || result.Text == "" {
-			result = &cli.Result{Text: "error: " + err.Error(), FullText: "error: " + err.Error()}
-		}
+		log.Printf("handler: transcribe %s: %v", path, err)
+		return ""
 	}
-
-	return result, err
-}
-
-// maybeResetSession archives the Claude Code session transcript for dir
-// when it has grown past config.MaxSessionBytes(), so the next message
-// starts a fresh conversation instead of risking a long-context billing
-// error ("Usage credits are required for long context requests"). Only
-// applies to the claude/claudish backends, which share Claude Code's
-// on-disk session format; other backends are left untouched.
-func (h *Handler) maybeResetSession(dir string) {
-	name := h.Provider.Name()
-	if name != "claude" && name != "claudish" {
-		return
-	}
-
-	maxBytes := config.MaxSessionBytes()
-	if maxBytes <= 0 {
-		return
-	}
-
-	projectsDir, err := claudeProjectsDir()
-	if err != nil {
-		return
-	}
-
-	size, ok := claudeSessionSize(projectsDir, dir)
-	if !ok || size < maxBytes {
-		return
-	}
-
-	if err := resetClaudeSession(projectsDir, dir); err != nil {
-		log.Printf("handler: failed to reset oversized session in dir=%s: %v", dir, err)
-		return
-	}
-
-	log.Printf("handler: reset session in dir=%s (was %d bytes, threshold %d bytes)", dir, size, maxBytes)
+	log.Printf("handler: transcribed %ds of audio in %s (%d chars)", att.duration, time.Since(start).Round(time.Millisecond), len(text))
+	return text
 }
 
 func sendTyping(ctx context.Context, b *bot.Bot, chatID int64, threadID int) {
@@ -210,7 +228,7 @@ func sendTyping(ctx context.Context, b *bot.Bot, chatID int64, threadID int) {
 	}
 
 	for {
-		b.SendChatAction(ctx, params)
+		b.SendChatAction(ctx, params) //nolint:errcheck // typing indicator is best-effort
 
 		select {
 		case <-ctx.Done():
