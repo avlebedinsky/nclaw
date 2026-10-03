@@ -351,3 +351,12 @@ func TestWhisperSettings(t *testing.T) {
 	assert.Equal(t, "ru", WhisperLanguage())
 	assert.Equal(t, "/usr/bin/whisper", WhisperBin())
 }
+
+func TestReactions_DefaultsToEnabled(t *testing.T) {
+	viper.Reset()
+	assert.True(t, Reactions())
+
+	viper.Set("reactions", "false")
+	defer viper.Reset()
+	assert.False(t, Reactions())
+}

@@ -15,6 +15,7 @@ import (
 
 	"github.com/nickalie/nclaw/internal/chatqueue"
 	"github.com/nickalie/nclaw/internal/cli"
+	"github.com/nickalie/nclaw/internal/pipeline"
 )
 
 type safeSent struct {
@@ -22,7 +23,7 @@ type safeSent struct {
 	msgs []string
 }
 
-func (s *safeSent) send(_ context.Context, _ int64, _ int, text, _ string) error {
+func (s *safeSent) send(_ context.Context, _ pipeline.Dest, text, _ string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.msgs = append(s.msgs, text)

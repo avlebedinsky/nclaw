@@ -451,7 +451,7 @@ func (s *Scheduler) sendResult(task *model.ScheduledTask, result *cli.Result, ru
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	s.pipeline.Process(ctx, result, runErr, task.ChatID, task.ThreadID, dir, false)
+	s.pipeline.Process(ctx, result, runErr, pipeline.Dest{ChatID: task.ChatID, ThreadID: task.ThreadID}, dir, false)
 }
 
 func (s *Scheduler) getNextRun(jobID uuid.UUID) *time.Time {

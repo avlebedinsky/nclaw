@@ -13,6 +13,7 @@ import (
 	"github.com/go-telegram/bot/models"
 
 	"github.com/nickalie/nclaw/internal/chatqueue"
+	"github.com/nickalie/nclaw/internal/pipeline"
 )
 
 var commandRe = regexp.MustCompile(`^/([a-zA-Z0-9_]{1,32})(?:@([A-Za-z0-9_]+))?(?:\s|$)`)
@@ -191,7 +192,7 @@ func (h *Handler) notify(key chatqueue.Key, text string) {
 func (h *Handler) notifyWithin(key chatqueue.Key, text string, timeout time.Duration) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	if err := h.Send(ctx, key.ChatID, key.ThreadID, text, ""); err != nil {
+	if err := h.Send(ctx, pipeline.Dest{ChatID: key.ChatID, ThreadID: key.ThreadID}, text, ""); err != nil {
 		log.Printf("handler: notify chat=%d thread=%d: %v", key.ChatID, key.ThreadID, err)
 	}
 }

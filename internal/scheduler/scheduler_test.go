@@ -953,7 +953,7 @@ func setupRecordingScheduler(t *testing.T) (*Scheduler, *recordingProvider, *inv
 	require.NoError(t, err)
 
 	var sent []string
-	p := pipeline.New(func(_ context.Context, _ int64, _ int, text, _ string) error {
+	p := pipeline.New(func(_ context.Context, _ pipeline.Dest, text, _ string) error {
 		sent = append(sent, text)
 		return nil
 	}, sendfile.Senders{}, false)

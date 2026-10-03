@@ -623,7 +623,7 @@ func waitQueue(t *testing.T, h *Handler) {
 }
 
 func recordSend(sent *[]string) pipeline.SendFunc {
-	return func(_ context.Context, _ int64, _ int, text, _ string) error {
+	return func(_ context.Context, _ pipeline.Dest, text, _ string) error {
 		*sent = append(*sent, text)
 		return nil
 	}
@@ -1142,4 +1142,76 @@ func TestExtractAttachment_SpeechFlags(t *testing.T) {
 
 	assert.False(t, extractAttachment(&models.Message{Audio: &models.Audio{FileID: "a"}}).speech)
 	assert.False(t, extractAttachment(&models.Message{Document: &models.Document{FileID: "d"}}).speech)
+}
+
+// --- reactions and replies ---
+
+type reactionLog struct {
+	mu  sync.Mutex
+	got []string
+}
+
+func (r *reactionLog) react(_ context.Context, _ int64, msgID int, emoji string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.got = append(r.got, fmt.Sprintf("%d:%s", msgID, emoji))
+	return nil
+}
+
+func (r *reactionLog) all() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.got...)
+}
+
+func TestRunBatch_ReactsAndRepliesToLastMessage(t *testing.T) {
+	client := &mockClient{contResult: &cli.Result{Text: "done", FullText: "done"}}
+	var dests []pipeline.Dest
+	h := newTestHandler(t, &mockProvider{client: client}, func(_ context.Context, d pipeline.Dest, _, _ string) error {
+		dests = append(dests, d)
+		return nil
+	})
+	reactions := &reactionLog{}
+	h.React = reactions.react
+
+	h.RunBatch(context.Background(), testKey, []Inbound{{msgID: 10, text: "a"}, {msgID: 11, text: "b"}})
+
+	require.Len(t, dests, 1)
+	assert.Equal(t, pipeline.Dest{ChatID: 100, ReplyTo: 11}, dests[0])
+	assert.Equal(t, []string{"10:✍", "11:✍", "10:👌", "11:👌"}, reactions.all())
+}
+
+func TestRunBatch_ReactionOnFailureAndStop(t *testing.T) {
+	cases := map[string]struct {
+		err  error
+		want string
+	}{
+		"failure": {fmt.Errorf("boom"), "7:💔"},
+		"stopped": {fmt.Errorf("claude: %w", chatqueue.ErrStopped), "7:"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			h := newTestHandler(t, &mockProvider{client: &mockClient{contErr: tc.err}}, func(context.Context, pipeline.Dest, string, string) error { return nil })
+			reactions := &reactionLog{}
+			h.React = reactions.react
+
+			h.RunBatch(context.Background(), testKey, []Inbound{{msgID: 7, text: "x"}})
+
+			assert.Equal(t, []string{"7:✍", tc.want}, reactions.all())
+		})
+	}
+}
+
+func TestDefault_ReactsWhenQueued(t *testing.T) {
+	block := make(chan struct{})
+	defer close(block)
+	h := newTestHandler(t, &mockProvider{client: &mockClient{}}, nil)
+	h.Queue = chatqueue.New(func(context.Context, chatqueue.Key, []Inbound) { <-block }, chatqueue.Options{})
+	reactions := &reactionLog{}
+	h.React = reactions.react
+
+	h.Default(context.Background(), nil, &models.Update{Message: &models.Message{ID: 5, Text: "hi", Chat: models.Chat{ID: 100}}})
+
+	assert.Eventually(t, func() bool { return len(reactions.all()) == 1 }, 2*time.Second, 5*time.Millisecond)
+	assert.Equal(t, []string{"5:👀"}, reactions.all())
 }

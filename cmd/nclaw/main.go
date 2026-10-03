@@ -143,6 +143,9 @@ func setupBot(database *gorm.DB, provider cli.Provider) *app {
 		h.Progress = progress.NewBotAPI(b)
 	}
 	h.Transcriber = newTranscriber()
+	if config.Reactions() {
+		h.React = newReactFunc(b)
+	}
 	registerCommands(b, h)
 
 	fileSenders := sendfile.Senders{
@@ -389,12 +392,29 @@ func buildInputMedia(f sendfile.File) models.InputMedia {
 	}
 }
 
+func newReactFunc(b *bot.Bot) handler.MessageReactor {
+	return func(ctx context.Context, chatID int64, msgID int, emoji string) error {
+		params := &bot.SetMessageReactionParams{ChatID: chatID, MessageID: msgID, Reaction: []models.ReactionType{}}
+		if emoji != "" {
+			params.Reaction = []models.ReactionType{{
+				Type:              models.ReactionTypeTypeEmoji,
+				ReactionTypeEmoji: &models.ReactionTypeEmoji{Emoji: emoji},
+			}}
+		}
+		_, err := b.SetMessageReaction(ctx, params)
+		return err
+	}
+}
+
 func newPipelineSendFunc(b *bot.Bot) pipeline.SendFunc {
-	return func(ctx context.Context, chatID int64, threadID int, text, parseMode string) error {
+	return func(ctx context.Context, dest pipeline.Dest, text, parseMode string) error {
 		params := &bot.SendMessageParams{
-			ChatID:          chatID,
-			MessageThreadID: threadID,
+			ChatID:          dest.ChatID,
+			MessageThreadID: dest.ThreadID,
 			Text:            text,
+		}
+		if dest.ReplyTo != 0 {
+			params.ReplyParameters = &models.ReplyParameters{MessageID: dest.ReplyTo, AllowSendingWithoutReply: true}
 		}
 		if parseMode != "" {
 			params.ParseMode = models.ParseMode(parseMode)

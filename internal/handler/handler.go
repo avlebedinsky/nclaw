@@ -33,6 +33,40 @@ type Handler struct {
 	Send        pipeline.SendFunc
 	Progress    progress.MessageAPI
 	Transcriber Transcriber
+	React       MessageReactor
+}
+
+// MessageReactor sets the bot's reaction on a message; an empty emoji clears it.
+type MessageReactor func(ctx context.Context, chatID int64, msgID int, emoji string) error
+
+const (
+	reactionQueued  = "👀"
+	reactionWorking = "✍"
+	reactionDone    = "👌"
+	reactionFailed  = "💔"
+)
+
+func (h *Handler) react(key chatqueue.Key, batch []Inbound, emoji string) {
+	if h.React == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for _, in := range batch {
+		if in.msgID == 0 {
+			continue
+		}
+		if err := h.React(ctx, key.ChatID, in.msgID, emoji); err != nil {
+			log.Printf("handler: react chat=%d msg=%d: %v", key.ChatID, in.msgID, err)
+		}
+	}
+}
+
+func outcomeReaction(err error) string {
+	if err != nil {
+		return reactionFailed
+	}
+	return reactionDone
 }
 
 // Transcriber turns a downloaded voice message or video note into text.
@@ -74,13 +108,16 @@ func (h *Handler) Default(_ context.Context, _ *bot.Bot, update *models.Update) 
 	key := chatqueue.Key{ChatID: msg.Chat.ID, ThreadID: msg.MessageThreadID}
 	if err := h.Queue.Enqueue(key, in, settleFor(msg)); err != nil {
 		log.Printf("handler: chat=%d thread=%d message not queued: %v", key.ChatID, key.ThreadID, err)
+		return
 	}
+	go h.react(key, []Inbound{in}, reactionQueued)
 }
 
 // RunBatch answers a batch of queued messages from one chat with a single CLI run.
 func (h *Handler) RunBatch(ctx context.Context, key chatqueue.Key, batch []Inbound) {
 	dir := h.Invoker.ChatDir(key.ChatID, key.ThreadID)
 	ensureDir(dir)
+	h.react(key, batch, reactionWorking)
 
 	typingCtx, stopTyping := context.WithCancel(ctx)
 	defer stopTyping()
@@ -89,6 +126,23 @@ func (h *Handler) RunBatch(ctx context.Context, key chatqueue.Key, batch []Inbou
 	prompt := h.composePrompt(ctx, dir, batch)
 	log.Printf("handler: running %d message(s) for chat=%d thread=%d prompt_len=%d", len(batch), key.ChatID, key.ThreadID, len(prompt))
 
+	dest := pipeline.Dest{ChatID: key.ChatID, ThreadID: key.ThreadID, ReplyTo: batch[len(batch)-1].msgID}
+	out, streamed := h.run(ctx, key, dest, prompt)
+	stopTyping()
+
+	if errors.Is(out.Err, chatqueue.ErrStopped) || errors.Is(out.Err, chatqueue.ErrShuttingDown) {
+		log.Printf("handler: run for chat=%d thread=%d interrupted: %v", key.ChatID, key.ThreadID, out.Err)
+		h.react(key, batch, "")
+		return
+	}
+
+	deliverCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	h.Pipeline.Process(deliverCtx, withErrorText(out.Result, out.Err), out.Err, dest, out.Dir, streamed)
+	h.react(key, batch, outcomeReaction(out.Err))
+}
+
+func (h *Handler) run(ctx context.Context, key chatqueue.Key, dest pipeline.Dest, prompt string) (invoker.Outcome, bool) {
 	var stream *pipeline.StreamState
 	reporter := h.newReporter(key)
 	out := h.Invoker.Run(ctx, invoker.Request{
@@ -96,23 +150,14 @@ func (h *Handler) RunBatch(ctx context.Context, key chatqueue.Key, batch []Inbou
 		ThreadID: key.ThreadID,
 		Prompt:   prompt,
 		Configure: func(c cli.Client) {
-			stream = h.Pipeline.AttachStream(ctx, c, key.ChatID, key.ThreadID)
+			stream = h.Pipeline.AttachStream(ctx, c, dest)
 			if pc, ok := c.(cli.ProgressClient); ok && reporter != nil {
 				pc.OnToolUse(reporter.OnTool)
 			}
 		},
 	})
-	stopTyping()
 	reporter.Finish(context.WithoutCancel(ctx))
-
-	if errors.Is(out.Err, chatqueue.ErrStopped) || errors.Is(out.Err, chatqueue.ErrShuttingDown) {
-		log.Printf("handler: run for chat=%d thread=%d interrupted: %v", key.ChatID, key.ThreadID, out.Err)
-		return
-	}
-
-	deliverCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-	defer cancel()
-	h.Pipeline.Process(deliverCtx, withErrorText(out.Result, out.Err), out.Err, key.ChatID, key.ThreadID, out.Dir, stream.Streamed())
+	return out, stream.Streamed()
 }
 
 func (h *Handler) newReporter(key chatqueue.Key) *progress.Reporter {

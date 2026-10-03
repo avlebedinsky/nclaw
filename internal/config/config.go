@@ -86,6 +86,15 @@ func Progress() bool {
 	return viper.GetBool("progress")
 }
 
+// Reactions reports whether the bot marks messages with reactions while it queues,
+// works on and answers them (env: NCLAW_REACTIONS). Enabled by default.
+func Reactions() bool {
+	if !viper.IsSet("reactions") {
+		return true
+	}
+	return viper.GetBool("reactions")
+}
+
 // StreamMessages reports whether every assistant message from the CLI's JSON
 // stream should be sent as a separate Telegram reply (env: NCLAW_STREAM_MESSAGES).
 // When disabled (default), only the final message is sent.
