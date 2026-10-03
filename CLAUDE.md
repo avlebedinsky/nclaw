@@ -2,6 +2,36 @@
 
 Telegram bot that wraps AI coding CLIs (Claude Code, OpenAI Codex, GitHub Copilot, Google Gemini). Users message a Telegram bot, which invokes the configured CLI backend in a Docker container and returns the response. Each chat/thread gets its own persistent session.
 
+## Working Principles
+
+### Core Principle: KISS
+
+Keep it simple. Always reach for the smallest solution that solves the problem in front of you.
+
+- No speculative abstraction, no premature generalization, no feature you weren't asked for (YAGNI).
+- When code repeats, prefer duplication over an abstraction that adds coupling — wait until a pattern is proven before extracting it.
+- Fewer moving parts beats clever. Optimize for the next person reading the code, not for the fewest lines.
+- Match the surrounding code's idioms, naming, and structure rather than introducing a new style.
+
+### Code Comments
+
+Code explains itself through naming and structure. Default to **no comments**. Add one only when WHY is genuinely non-obvious (a hidden constraint, a bug workaround, a subtle invariant) — never WHAT. Keep it to **one short line**; no docstring-style blocks.
+
+### Repo Etiquette
+
+- Conventional-commit subjects (`feat:`, `fix:`, `refactor:`).
+- Commit or push only when asked.
+- Never mention "Claude", "Claude Code", or Anthropic in commit messages, PR titles, or descriptions.
+
+### Linters & Cleanup
+
+- Always run `make lint` and `make test` after any change, and fix every issue they report before considering the work done.
+- Fix **every** problem you discover in the repo — lint warnings, failing tests, stale docs — even pre-existing and unrelated. Land it as a focused sibling change in the same session.
+
+### CI
+
+After every `git push`, watch the triggered GitHub Actions run to completion and report the result — never push and walk away (`gh run watch`).
+
 ## Architecture
 
 ```
@@ -77,6 +107,7 @@ Required env vars (prefix `NCLAW_`):
 
 Optional:
 - `NCLAW_CLI` - CLI backend to use: `claude` (default), `claudish` (multi-model), `codex`, `copilot`, or `gemini`. Auto-selects `claudish` when `NCLAW_MODEL` is set
+- `NCLAW_CLAUDE_EXEC_PATH` - Full path to the Claude CLI binary (default: `claude` from `PATH`)
 - `NCLAW_MODEL` - Model for multi-model backend (e.g. `g@gemini-2.5-pro`, `oai@gpt-4o`)
 - `NCLAW_MODEL_OPUS` - Claudish Opus-tier model override
 - `NCLAW_MODEL_SONNET` - Claudish Sonnet-tier model override
@@ -84,6 +115,8 @@ Optional:
 - `NCLAW_MODEL_SUBAGENT` - Claudish subagent model override
 - `NCLAW_COPILOT_MODEL` - Model for Copilot backend (e.g. `gpt-4.1`)
 - `NCLAW_TELEGRAM_WHITELIST_CHAT_IDS` - Comma-separated list of allowed Telegram chat IDs (if unset, bot accepts all chats with a security warning)
+- `NCLAW_STARTUP_NOTIFICATION` - Send a "bot started" notification to whitelisted chats on startup (default: `false`)
+- `NCLAW_STREAM_MESSAGES` - Send every assistant message from the CLI's JSON stream as a separate reply instead of only the final one (default: `false`). For Claude/Claudish in the Telegram handler, messages are delivered live as they arrive (real-time streaming); other backends/channels split the final buffered output
 - `NCLAW_DB_PATH` - SQLite path (default: `{data_dir}/nclaw.db`)
 - `NCLAW_MAX_SESSION_BYTES` - Claude Code session transcript size (bytes) past which the session is archived and restarted fresh on the next message (default: `0`, disabled). Only applies to `claude`/`claudish` backends
 - `NCLAW_TIMEZONE` - Timezone for scheduler (default: system local)
@@ -112,10 +145,13 @@ make docker-gemini   # Build Gemini-only image
 - Keep methods small to stay under complexity limit
 - Standard Go conventions
 - Never mention "Claude Code" in commit messages or PR titles/descriptions
+- Always run `golangci-lint run ./...` after any code changes before committing
 
 ## Testing
 
-- Always write tests for new code and bug fixes
+- Always write tests for new code and bug fixes, covering both success and error paths.
+- Test behavior, not implementation details.
+- Prefer real dependencies over mocks (e.g. in-memory SQLite, `httptest` servers) so tests exercise the actual integration.
 - Use `github.com/stretchr/testify` (assert/require)
 - Use in-memory SQLite for database tests
 - Use `t.TempDir()` for file system tests

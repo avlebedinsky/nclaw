@@ -3,11 +3,13 @@ package claude
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNew(t *testing.T) {
@@ -42,6 +44,7 @@ func TestBuilderChaining(t *testing.T) {
 	assert.Same(t, c, c.Timeout(30*time.Second))
 	assert.Same(t, c, c.StdIn(strings.NewReader("input")))
 	assert.Same(t, c, c.Env([]string{"FOO=bar"}))
+	assert.Same(t, c, c.ExecPath("/opt/claude/bin/claude"))
 }
 
 func TestBuilderFieldValues(t *testing.T) {
@@ -168,6 +171,25 @@ func TestProvider_NewClient(t *testing.T) {
 	c, ok := client.(*Claude)
 	assert.True(t, ok)
 	assert.NotNil(t, c.bin)
+}
+
+func TestProvider_NewClientWithExecPath(t *testing.T) {
+	p := NewProvider("/opt/claude/bin/claude")
+	client := p.NewClient()
+	c, ok := client.(*Claude)
+	assert.True(t, ok)
+	assert.Equal(t, "/opt/claude/bin/claude", c.bin.Path())
+}
+
+func TestProvider_VersionWithExecPath(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "claude-test")
+	require.NoError(t, os.WriteFile(path, []byte("#!/bin/sh\necho custom-claude 1.2.3\n"), 0o755))
+
+	p := NewProvider(path)
+	v, err := p.Version()
+	assert.NoError(t, err)
+	assert.Equal(t, "custom-claude 1.2.3", v)
 }
 
 func TestProvider_PreInvoke(t *testing.T) {
@@ -457,4 +479,51 @@ func TestPrepare_ResetsClearsOldArgs(t *testing.T) {
 	assert.NotContains(t, firstArgs, "-c")
 	assert.Contains(t, secondArgs, "-c")
 	assert.Contains(t, secondArgs, "-p")
+}
+
+// writeFakeClaude writes an executable shell script that emits the given stdout
+// verbatim, returning its path. Skips the test on Windows.
+func writeFakeClaude(t *testing.T, stdout string) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("fake shell-script binary not supported on Windows")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "claude")
+	script := "#!/bin/sh\ncat <<'CLAUDE_EOF'\n" + stdout + "\nCLAUDE_EOF\n"
+	require.NoError(t, os.WriteFile(path, []byte(script), 0o755))
+	return path
+}
+
+func TestOnMessage_StreamsLive(t *testing.T) {
+	stdout := `{"type":"system","subtype":"init"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"thinking"}]}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"done"}]}}
+{"type":"result","result":"done"}`
+
+	path := writeFakeClaude(t, stdout)
+
+	var got []string
+	c := New().ExecPath(path)
+	c.OnMessage(func(m string) { got = append(got, m) })
+
+	result, err := c.Ask("hello")
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"thinking", "done"}, got)
+	assert.Equal(t, "done", result.Text)
+	assert.Equal(t, "thinking\ndone", result.FullText)
+	assert.Equal(t, []string{"thinking", "done"}, result.Messages)
+}
+
+func TestOnMessage_NotSet_NoStreaming(t *testing.T) {
+	stdout := `{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}
+{"type":"result","result":"hi"}`
+
+	path := writeFakeClaude(t, stdout)
+
+	c := New().ExecPath(path)
+	result, err := c.Ask("hello")
+	require.NoError(t, err)
+	assert.Equal(t, "hi", result.Text)
 }

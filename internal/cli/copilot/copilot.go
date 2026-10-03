@@ -2,6 +2,7 @@ package copilot
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -188,5 +189,7 @@ func (c *Copilot) saveSessionID(id string) {
 		return
 	}
 
-	_ = os.WriteFile(filepath.Join(c.dir, sessionIDFile), []byte(id), 0o644)
+	if err := os.WriteFile(filepath.Join(c.dir, sessionIDFile), []byte(id), 0o644); err != nil {
+		log.Printf("copilot: save session id: %v", err)
+	}
 }

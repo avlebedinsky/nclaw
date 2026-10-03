@@ -44,7 +44,7 @@ func parseJSONOutput(output []byte) parseResult {
 	lastMessage := messages[len(messages)-1]
 
 	return parseResult{
-		result:    &cli.Result{Text: lastMessage, FullText: fullText},
+		result:    &cli.Result{Text: lastMessage, FullText: fullText, Messages: messages},
 		sessionID: sessionID,
 	}
 }

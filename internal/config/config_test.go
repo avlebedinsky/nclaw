@@ -87,6 +87,32 @@ func TestWhitelistChatIDs_Single(t *testing.T) {
 	assert.Equal(t, []int64{42}, ids)
 }
 
+func TestStartupNotification_Default(t *testing.T) {
+	viper.Reset()
+
+	assert.False(t, StartupNotification())
+}
+
+func TestStartupNotification_Enabled(t *testing.T) {
+	viper.Set("startup_notification", true)
+	defer viper.Reset()
+
+	assert.True(t, StartupNotification())
+}
+
+func TestStreamMessages_Default(t *testing.T) {
+	viper.Reset()
+
+	assert.False(t, StreamMessages())
+}
+
+func TestStreamMessages_Enabled(t *testing.T) {
+	viper.Set("stream_messages", true)
+	defer viper.Reset()
+
+	assert.True(t, StreamMessages())
+}
+
 func TestWebhookBaseDomain(t *testing.T) {
 	// Value should be a bare domain (no protocol) since WebhookURL prepends "https://".
 	viper.Set("webhook.base_domain", "example.com")
@@ -160,6 +186,13 @@ func TestCLI_ExplicitClaudishWithoutModel(t *testing.T) {
 func TestValidCLIBackends(t *testing.T) {
 	backends := ValidCLIBackends()
 	assert.Equal(t, []string{"claude", "claudish", "codex", "copilot", "gemini"}, backends)
+}
+
+func TestClaudeExecPath(t *testing.T) {
+	viper.Set("claude_exec_path", "/opt/claude/bin/claude")
+	defer viper.Reset()
+
+	assert.Equal(t, "/opt/claude/bin/claude", ClaudeExecPath())
 }
 
 func TestModel(t *testing.T) {
