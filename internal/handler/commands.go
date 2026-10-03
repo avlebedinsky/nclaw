@@ -51,6 +51,19 @@ func (h *Handler) Command(_ context.Context, _ *bot.Bot, update *models.Update) 
 	h.commandFunc(name)(key)
 }
 
+// MatchStopGeneration reports whether the user pressed the stop button of a live draft.
+func (h *Handler) MatchStopGeneration(update *models.Update) bool {
+	return update.StoppedMessageGeneration != nil
+}
+
+// StopGeneration handles the stop button of a live draft like /stop.
+func (h *Handler) StopGeneration(_ context.Context, _ *bot.Bot, update *models.Update) {
+	stopped := update.StoppedMessageGeneration
+	key := chatqueue.Key{ChatID: stopped.Chat.ID, ThreadID: stopped.MessageThreadID}
+	log.Printf("handler: draft %d stopped in chat=%d thread=%d", stopped.DraftID, key.ChatID, key.ThreadID)
+	h.stop(key)
+}
+
 func (h *Handler) commandFunc(name string) func(chatqueue.Key) {
 	switch name {
 	case "stop":

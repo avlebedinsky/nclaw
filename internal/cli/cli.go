@@ -87,3 +87,12 @@ type ToolHandler func(ToolEvent)
 type ProgressClient interface {
 	OnToolUse(handler ToolHandler) Client
 }
+
+// PartialHandler receives the text of the assistant message being generated, growing
+// as the CLI streams it.
+type PartialHandler func(text string)
+
+// PartialClient is implemented by clients that stream partial assistant text.
+type PartialClient interface {
+	OnPartialText(handler PartialHandler) Client
+}

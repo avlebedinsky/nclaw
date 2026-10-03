@@ -20,6 +20,7 @@ var (
 	_ cli.StreamingClient = (*Claude)(nil)
 	_ cli.EphemeralClient = (*Claude)(nil)
 	_ cli.ProgressClient  = (*Claude)(nil)
+	_ cli.PartialClient   = (*Claude)(nil)
 )
 
 // outputFormat represents the output format for the CLI.
@@ -51,6 +52,7 @@ type Claude struct {
 	stdIn           io.Reader
 	onMessage       cli.MessageHandler
 	onTool          cli.ToolHandler
+	onPartial       cli.PartialHandler
 	skipPermissions bool
 	noPersistence   bool
 	verbose         bool
@@ -185,6 +187,13 @@ func (c *Claude) runCtx() context.Context {
 	return c.ctx
 }
 
+// OnPartialText registers a callback that receives the assistant text as it is generated.
+// Implements cli.PartialClient.
+func (c *Claude) OnPartialText(handler cli.PartialHandler) cli.Client {
+	c.onPartial = handler
+	return c
+}
+
 // OnToolUse registers a callback invoked for each tool call as it streams from the CLI.
 // Implements cli.ProgressClient.
 func (c *Claude) OnToolUse(handler cli.ToolHandler) cli.Client {
@@ -281,13 +290,13 @@ func (c *Claude) runAndParse(query string) (*cli.Result, error) {
 // assistant message is delivered live; otherwise output is captured and parsed
 // at the end.
 func (c *Claude) run(query string) (*cli.Result, []byte, error) {
-	if c.onMessage == nil && c.onTool == nil {
+	if c.onMessage == nil && c.onTool == nil && c.onPartial == nil {
 		err := c.bin.Run(c.runCtx(), query)
 		stdout := c.bin.StdOut()
 		return streamjson.ParseOutput(stdout), stdout, err
 	}
 
-	w := streamjson.NewStreamWriter(c.onMessage).WithToolHandler(c.onTool)
+	w := streamjson.NewStreamWriter(c.onMessage).WithToolHandler(c.onTool).WithPartialHandler(c.onPartial)
 	c.bin.SetStdOut(w)
 	err := c.bin.Run(c.runCtx(), query)
 	return w.Result(), w.Bytes(), err
@@ -445,5 +454,9 @@ func (c *Claude) prepareFlags() {
 
 	if c.verbose {
 		c.bin.Arg("--verbose")
+	}
+
+	if c.onPartial != nil {
+		c.bin.Arg("--include-partial-messages")
 	}
 }

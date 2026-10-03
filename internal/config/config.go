@@ -86,6 +86,15 @@ func Progress() bool {
 	return viper.GetBool("progress")
 }
 
+// LiveDrafts reports whether private chats see the answer being written in a live
+// Telegram draft (env: NCLAW_LIVE_DRAFTS). Enabled by default.
+func LiveDrafts() bool {
+	if !viper.IsSet("live_drafts") {
+		return true
+	}
+	return viper.GetBool("live_drafts")
+}
+
 // Reactions reports whether the bot marks messages with reactions while it queues,
 // works on and answers them (env: NCLAW_REACTIONS). Enabled by default.
 func Reactions() bool {

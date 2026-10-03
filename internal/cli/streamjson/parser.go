@@ -10,9 +10,19 @@ import (
 
 // streamEvent represents a single event from stream-json (NDJSON) output.
 type streamEvent struct {
-	Type    string          `json:"type"`
-	Message json.RawMessage `json:"message,omitempty"`
-	Result  string          `json:"result,omitempty"`
+	Type            string          `json:"type"`
+	Message         json.RawMessage `json:"message,omitempty"`
+	Result          string          `json:"result,omitempty"`
+	Event           json.RawMessage `json:"event,omitempty"`
+	ParentToolUseID string          `json:"parent_tool_use_id,omitempty"`
+}
+
+type partialEvent struct {
+	Type  string `json:"type"`
+	Delta struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	} `json:"delta"`
 }
 
 // assistantMessage represents the content of an assistant message.
@@ -60,6 +70,8 @@ func assembleResult(allText []string, resultText string) *cli.Result {
 type StreamWriter struct {
 	onMessage  func(string)
 	onTool     cli.ToolHandler
+	onPartial  cli.PartialHandler
+	partial    strings.Builder
 	pending    []byte
 	raw        bytes.Buffer
 	messages   []string
@@ -76,6 +88,13 @@ func NewStreamWriter(onMessage func(string)) *StreamWriter {
 // WithToolHandler makes the writer report every tool call to h as it streams in.
 func (w *StreamWriter) WithToolHandler(h cli.ToolHandler) *StreamWriter {
 	w.onTool = h
+	return w
+}
+
+// WithPartialHandler makes the writer report the text of the assistant message being
+// generated as it grows; it needs the CLI's partial-message events.
+func (w *StreamWriter) WithPartialHandler(h cli.PartialHandler) *StreamWriter {
+	w.onPartial = h
 	return w
 }
 
@@ -139,6 +158,25 @@ func (w *StreamWriter) handleLine(line []byte) {
 		w.handleAssistant(event.Message)
 	case "result":
 		w.resultText = event.Result
+	case "stream_event":
+		w.handlePartial(&event)
+	}
+}
+
+func (w *StreamWriter) handlePartial(event *streamEvent) {
+	if w.onPartial == nil || event.ParentToolUseID != "" {
+		return
+	}
+	var pe partialEvent
+	if err := json.Unmarshal(event.Event, &pe); err != nil {
+		return
+	}
+	switch {
+	case pe.Type == "message_start":
+		w.partial.Reset()
+	case pe.Type == "content_block_delta" && pe.Delta.Type == "text_delta":
+		w.partial.WriteString(pe.Delta.Text)
+		w.onPartial(w.partial.String())
 	}
 }
 

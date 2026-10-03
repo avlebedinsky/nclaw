@@ -559,3 +559,14 @@ func TestContext_CancelStopsRunningProcess(t *testing.T) {
 		t.Fatal("claude process was not stopped")
 	}
 }
+
+func TestOnPartialText_RequestsPartialMessages(t *testing.T) {
+	c := New()
+	c.OnPartialText(func(string) {})
+	c.prepare("-p")
+	assert.Contains(t, c.bin.Args(), "--include-partial-messages")
+
+	plain := New()
+	plain.prepare("-p")
+	assert.NotContains(t, plain.bin.Args(), "--include-partial-messages")
+}

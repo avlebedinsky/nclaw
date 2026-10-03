@@ -16,6 +16,7 @@ import (
 	"github.com/nickalie/nclaw/internal/chatqueue"
 	"github.com/nickalie/nclaw/internal/cli"
 	"github.com/nickalie/nclaw/internal/config"
+	"github.com/nickalie/nclaw/internal/draft"
 	"github.com/nickalie/nclaw/internal/invoker"
 	"github.com/nickalie/nclaw/internal/pipeline"
 	"github.com/nickalie/nclaw/internal/progress"
@@ -34,6 +35,7 @@ type Handler struct {
 	Progress    progress.MessageAPI
 	Transcriber Transcriber
 	React       MessageReactor
+	Drafts      draft.API
 }
 
 // MessageReactor sets the bot's reaction on a message; an empty emoji clears it.
@@ -74,18 +76,30 @@ type Transcriber interface {
 	Transcribe(ctx context.Context, path string) (string, error)
 }
 
-// AllowChat is bot middleware that drops updates without a message or from chats
-// outside the whitelist.
+// AllowChat is bot middleware that drops updates nclaw does not handle and updates
+// from chats outside the whitelist.
 func AllowChat(next bot.HandlerFunc) bot.HandlerFunc {
 	return func(ctx context.Context, b *bot.Bot, update *models.Update) {
-		if update.Message == nil {
+		chatID, ok := updateChatID(update)
+		if !ok {
 			return
 		}
-		if !isChatAllowed(update.Message.Chat.ID) {
-			log.Printf("handler: ignoring message from non-whitelisted chat=%d", update.Message.Chat.ID)
+		if !isChatAllowed(chatID) {
+			log.Printf("handler: ignoring update from non-whitelisted chat=%d", chatID)
 			return
 		}
 		next(ctx, b, update)
+	}
+}
+
+func updateChatID(update *models.Update) (int64, bool) {
+	switch {
+	case update.Message != nil:
+		return update.Message.Chat.ID, true
+	case update.StoppedMessageGeneration != nil:
+		return update.StoppedMessageGeneration.Chat.ID, true
+	default:
+		return 0, false
 	}
 }
 
@@ -145,19 +159,35 @@ func (h *Handler) RunBatch(ctx context.Context, key chatqueue.Key, batch []Inbou
 func (h *Handler) run(ctx context.Context, key chatqueue.Key, dest pipeline.Dest, prompt string) (invoker.Outcome, bool) {
 	var stream *pipeline.StreamState
 	reporter := h.newReporter(key)
+	drafter := h.newDrafter(key)
 	out := h.Invoker.Run(ctx, invoker.Request{
 		ChatID:   key.ChatID,
 		ThreadID: key.ThreadID,
 		Prompt:   prompt,
 		Configure: func(c cli.Client) {
 			stream = h.Pipeline.AttachStream(ctx, c, dest)
-			if pc, ok := c.(cli.ProgressClient); ok && reporter != nil {
-				pc.OnToolUse(reporter.OnTool)
-			}
+			attachLiveViews(c, reporter, drafter)
 		},
 	})
+	drafter.Finish()
 	reporter.Finish(context.WithoutCancel(ctx))
 	return out, stream.Streamed()
+}
+
+func attachLiveViews(c cli.Client, reporter *progress.Reporter, drafter *draft.Drafter) {
+	if pc, ok := c.(cli.ProgressClient); ok && reporter != nil {
+		pc.OnToolUse(reporter.OnTool)
+	}
+	if pc, ok := c.(cli.PartialClient); ok && drafter != nil {
+		pc.OnPartialText(drafter.Update)
+	}
+}
+
+func (h *Handler) newDrafter(key chatqueue.Key) *draft.Drafter {
+	if h.Drafts == nil || key.ChatID <= 0 {
+		return nil
+	}
+	return draft.New(h.Drafts, key.ChatID, key.ThreadID, draft.Options{})
 }
 
 func (h *Handler) newReporter(key chatqueue.Key) *progress.Reporter {

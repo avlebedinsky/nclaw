@@ -360,3 +360,12 @@ func TestReactions_DefaultsToEnabled(t *testing.T) {
 	defer viper.Reset()
 	assert.False(t, Reactions())
 }
+
+func TestLiveDrafts_DefaultsToEnabled(t *testing.T) {
+	viper.Reset()
+	assert.True(t, LiveDrafts())
+
+	viper.Set("live_drafts", "false")
+	defer viper.Reset()
+	assert.False(t, LiveDrafts())
+}

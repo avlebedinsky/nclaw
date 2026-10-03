@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -146,6 +147,9 @@ func setupBot(database *gorm.DB, provider cli.Provider) *app {
 	if config.Reactions() {
 		h.React = newReactFunc(b)
 	}
+	if config.LiveDrafts() {
+		h.Drafts = draftAPI{b: b}
+	}
 	registerCommands(b, h)
 
 	fileSenders := sendfile.Senders{
@@ -224,6 +228,7 @@ func registerCommands(b *bot.Bot, h *handler.Handler) {
 		h.BotUsername = me.Username
 	}
 	b.RegisterHandlerMatchFunc(h.MatchCommand, h.Command)
+	b.RegisterHandlerMatchFunc(h.MatchStopGeneration, h.StopGeneration)
 	if _, err := b.SetMyCommands(ctx, &bot.SetMyCommandsParams{Commands: handler.Commands}); err != nil {
 		log.Printf("telegram: setMyCommands: %v", err)
 	}
@@ -390,6 +395,21 @@ func buildInputMedia(f sendfile.File) models.InputMedia {
 			Media: attach, Caption: f.Caption, MediaAttachment: reader,
 		}
 	}
+}
+
+type draftAPI struct {
+	b *bot.Bot
+}
+
+func (a draftAPI) SendDraft(ctx context.Context, chatID int64, threadID int, draftID int64, text string) error {
+	_, err := a.b.SendMessageDraft(ctx, &bot.SendMessageDraftParams{
+		ChatID:          chatID,
+		MessageThreadID: threadID,
+		DraftID:         strconv.FormatInt(draftID, 10),
+		Text:            text,
+		CanStop:         true,
+	})
+	return err
 }
 
 func newReactFunc(b *bot.Bot) handler.MessageReactor {

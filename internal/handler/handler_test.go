@@ -1215,3 +1215,101 @@ func TestDefault_ReactsWhenQueued(t *testing.T) {
 	assert.Eventually(t, func() bool { return len(reactions.all()) == 1 }, 2*time.Second, 5*time.Millisecond)
 	assert.Equal(t, []string{"5:👀"}, reactions.all())
 }
+
+// --- live drafts ---
+
+type partialClient struct {
+	mockClient
+	onPartial cli.PartialHandler
+}
+
+func (c *partialClient) Context(context.Context) cli.Client   { return c }
+func (c *partialClient) Dir(string) cli.Client                { return c }
+func (c *partialClient) SkipPermissions() cli.Client          { return c }
+func (c *partialClient) AppendSystemPrompt(string) cli.Client { return c }
+func (c *partialClient) OnPartialText(h cli.PartialHandler) cli.Client {
+	c.onPartial = h
+	return c
+}
+func (c *partialClient) Continue(string) (*cli.Result, error) {
+	time.Sleep(30 * time.Millisecond)
+	c.onPartial("<b>Almost</b> there")
+	time.Sleep(1500 * time.Millisecond)
+	return &cli.Result{Text: "final", FullText: "final"}, nil
+}
+
+type partialProvider struct {
+	mockProvider
+	client *partialClient
+}
+
+func (p *partialProvider) NewClient() cli.Client { return p.client }
+
+type draftLog struct {
+	mu    sync.Mutex
+	texts []string
+}
+
+func (d *draftLog) SendDraft(_ context.Context, _ int64, _ int, _ int64, text string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.texts = append(d.texts, text)
+	return nil
+}
+
+func (d *draftLog) all() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]string(nil), d.texts...)
+}
+
+func TestRunBatch_LiveDraftInPrivateChat(t *testing.T) {
+	drafts := &draftLog{}
+	sent := &safeSent{}
+	h := newTestHandler(t, &partialProvider{client: &partialClient{}}, sent.send)
+	h.Drafts = drafts
+
+	h.RunBatch(context.Background(), chatqueue.Key{ChatID: 100}, []Inbound{{text: "go"}})
+
+	assert.Equal(t, []string{"", "Almost there"}, drafts.all())
+	assert.Equal(t, []string{"final"}, sent.all())
+}
+
+func TestRunBatch_NoDraftInGroups(t *testing.T) {
+	drafts := &draftLog{}
+	h := newTestHandler(t, &mockProvider{client: &mockClient{contResult: &cli.Result{Text: "ok"}}}, func(context.Context, pipeline.Dest, string, string) error { return nil })
+	h.Drafts = drafts
+
+	h.RunBatch(context.Background(), chatqueue.Key{ChatID: -100123}, []Inbound{{text: "go"}})
+
+	assert.Empty(t, drafts.all())
+}
+
+func TestStopGeneration_StopsTheChat(t *testing.T) {
+	client := &blockingClient{started: make(chan struct{})}
+	sent := &safeSent{}
+	h := newTestHandler(t, &blockingProvider{client: client}, sent.send)
+	h.Send = sent.send
+
+	h.Default(context.Background(), nil, commandUpdate("long job"))
+	<-client.started
+	update := &models.Update{StoppedMessageGeneration: &models.MessageGenerationStopped{Chat: models.Chat{ID: 100}, DraftID: 1}}
+	require.True(t, h.MatchStopGeneration(update))
+	h.StopGeneration(context.Background(), nil, update)
+	waitQueue(t, h)
+
+	require.Eventually(t, func() bool { return len(sent.all()) == 1 }, 5*time.Second, 10*time.Millisecond)
+	assert.Contains(t, sent.all()[0], "⏹ Stopped your request")
+}
+
+func TestAllowChat_PassesStopButtonFromWhitelistedChat(t *testing.T) {
+	viper.Set("telegram.whitelist_chat_ids", "100")
+	defer viper.Reset()
+
+	var passed int
+	next := AllowChat(func(context.Context, *bot.Bot, *models.Update) { passed++ })
+	next(context.Background(), nil, &models.Update{StoppedMessageGeneration: &models.MessageGenerationStopped{Chat: models.Chat{ID: 100}}})
+	next(context.Background(), nil, &models.Update{StoppedMessageGeneration: &models.MessageGenerationStopped{Chat: models.Chat{ID: 5}}})
+
+	assert.Equal(t, 1, passed)
+}
