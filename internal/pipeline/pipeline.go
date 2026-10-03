@@ -3,9 +3,9 @@ package pipeline
 import (
 	"context"
 	"log"
-	"regexp"
 	"strings"
 
+	"github.com/nickalie/nclaw/internal/blocks"
 	"github.com/nickalie/nclaw/internal/cli"
 	"github.com/nickalie/nclaw/internal/sendfile"
 	"github.com/nickalie/nclaw/internal/telegram"
@@ -20,12 +20,6 @@ type BlockExecutor interface {
 
 // SendFunc sends a text message to a Telegram chat/thread with an optional parse mode.
 type SendFunc func(ctx context.Context, chatID int64, threadID int, text, parseMode string) error
-
-// Own copies of block regexes to avoid import cycles with scheduler/webhook packages.
-var (
-	scheduleBlockRe = regexp.MustCompile("(?s)```nclaw:schedule\n(.*?)\n```")
-	webhookBlockRe  = regexp.MustCompile("(?s)```nclaw:webhook\n(.*?)\n```")
-)
 
 // Pipeline orchestrates post-Claude response processing: block execution,
 // stripping, status appending, file sending, and reply delivery.
@@ -94,7 +88,7 @@ func (p *Pipeline) AttachStream(ctx context.Context, client cli.Client, chatID i
 
 	st := &StreamState{}
 	sc.OnMessage(func(msg string) {
-		if text := stripAllBlocks(msg); text != "" {
+		if text := blocks.StripAll(msg); text != "" {
 			st.sent++
 			p.sendReply(ctx, chatID, threadID, text)
 		}
@@ -153,7 +147,7 @@ func (p *Pipeline) executeBlocks(
 		sendfile.ExecuteBlocks(ctx, p.senders, result.FullText, chatID, threadID, dir)
 	}
 
-	if !p.webhooksConfigured && webhookBlockRe.MatchString(result.Text) {
+	if !p.webhooksConfigured && blocks.Webhook.MatchString(result.Text) {
 		statusMsgs = append(statusMsgs, "[Webhooks are not configured on this instance]")
 	}
 
@@ -167,7 +161,7 @@ func (p *Pipeline) displayTexts(result *cli.Result) []string {
 	if p.streamMessages && len(result.Messages) > 0 {
 		var texts []string
 		for _, m := range result.Messages {
-			if s := stripAllBlocks(m); s != "" {
+			if s := blocks.StripAll(m); s != "" {
 				texts = append(texts, s)
 			}
 		}
@@ -176,18 +170,10 @@ func (p *Pipeline) displayTexts(result *cli.Result) []string {
 		}
 	}
 
-	if s := stripAllBlocks(result.Text); s != "" {
+	if s := blocks.StripAll(result.Text); s != "" {
 		return []string{s}
 	}
 	return nil
-}
-
-// stripAllBlocks removes all known command block types from text.
-func stripAllBlocks(text string) string {
-	text = sendfile.StripBlocks(text)
-	text = scheduleBlockRe.ReplaceAllString(text, "")
-	text = webhookBlockRe.ReplaceAllString(text, "")
-	return strings.TrimSpace(text)
 }
 
 func appendStatus(text string, msgs []string) string {

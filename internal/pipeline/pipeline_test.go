@@ -359,12 +359,6 @@ func TestProcess_Streamed_NoStatus_SendsNothing(t *testing.T) {
 	assert.Empty(t, ms.calls, "streamed messages must not be re-sent")
 }
 
-func TestStripAllBlocks(t *testing.T) {
-	text := "before\n```nclaw:schedule\n{}\n```\nmiddle\n```nclaw:webhook\n{}\n```\nafter"
-	result := stripAllBlocks(text)
-	assert.Equal(t, "before\n\nmiddle\n\nafter", result)
-}
-
 func TestAppendStatus_Empty(t *testing.T) {
 	assert.Equal(t, "hello", appendStatus("hello", nil))
 	assert.Equal(t, "hello", appendStatus("hello", []string{}))

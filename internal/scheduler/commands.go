@@ -4,15 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"regexp"
 	"strings"
 	"time"
 
+	"github.com/nickalie/nclaw/internal/blocks"
 	"github.com/nickalie/nclaw/internal/db"
 	"github.com/nickalie/nclaw/internal/model"
 )
-
-var scheduleBlockRe = regexp.MustCompile("(?s)```nclaw:schedule\n(.*?)\n```")
 
 type scheduleCommand struct {
 	Action  string `json:"action"`
@@ -26,7 +24,7 @@ type scheduleCommand struct {
 // ExecuteBlocks extracts nclaw:schedule code blocks from text, executes them,
 // and returns any status messages (errors). Does not modify the input text.
 func (s *Scheduler) ExecuteBlocks(text string, chatID int64, threadID int) string {
-	matches := scheduleBlockRe.FindAllStringSubmatch(text, -1)
+	matches := blocks.Schedule.FindAllStringSubmatch(text, -1)
 	if len(matches) == 0 {
 		return ""
 	}

@@ -6,8 +6,9 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
+
+	"github.com/nickalie/nclaw/internal/blocks"
 )
 
 // MediaType indicates how a file should be sent via Telegram.
@@ -40,16 +41,9 @@ type SendMediaGroupFunc func(ctx context.Context, chatID int64, threadID int, fi
 
 const maxMediaGroupSize = 10
 
-var blockRe = regexp.MustCompile("(?s)```nclaw:sendfile\n(.*?)\n```")
-
 type command struct {
 	Path    string `json:"path"`
 	Caption string `json:"caption"`
-}
-
-// StripBlocks removes nclaw:sendfile code blocks from text without processing them.
-func StripBlocks(text string) string {
-	return strings.TrimSpace(blockRe.ReplaceAllString(text, ""))
 }
 
 // Senders groups all Telegram send callbacks used by ExecuteBlocks.
@@ -66,7 +60,7 @@ func ExecuteBlocks(
 	ctx context.Context, senders Senders,
 	text string, chatID int64, threadID int, dir string,
 ) {
-	matches := blockRe.FindAllStringSubmatch(text, -1)
+	matches := blocks.SendFile.FindAllStringSubmatch(text, -1)
 	if len(matches) == 0 {
 		return
 	}

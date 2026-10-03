@@ -1,7 +1,6 @@
 package scheduler
 
 import (
-	"strings"
 	"testing"
 	"time"
 
@@ -11,6 +10,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
+	"github.com/nickalie/nclaw/internal/blocks"
 	"github.com/nickalie/nclaw/internal/cli"
 	"github.com/nickalie/nclaw/internal/model"
 	"github.com/nickalie/nclaw/internal/telegram"
@@ -39,25 +39,6 @@ func setupTestScheduler(t *testing.T) *Scheduler {
 	return sched
 }
 
-func TestScheduleBlockRegex(t *testing.T) {
-	input := "text\n```nclaw:schedule\n{\"action\":\"create\"}\n```\nmore"
-	matches := scheduleBlockRe.FindAllStringSubmatch(input, -1)
-	assert.Len(t, matches, 1)
-	assert.Equal(t, "{\"action\":\"create\"}", matches[0][1])
-}
-
-func TestScheduleBlockRegex_Multiple(t *testing.T) {
-	input := "```nclaw:schedule\n{\"action\":\"create\"}\n```\nmiddle\n```nclaw:schedule\n{\"action\":\"cancel\"}\n```"
-	matches := scheduleBlockRe.FindAllStringSubmatch(input, -1)
-	assert.Len(t, matches, 2)
-}
-
-func TestScheduleBlockRegex_NoMatch(t *testing.T) {
-	input := "just regular text\n```go\nfmt.Println(\"hello\")\n```"
-	matches := scheduleBlockRe.FindAllStringSubmatch(input, -1)
-	assert.Empty(t, matches)
-}
-
 func TestExecuteBlocks_CreateTask(t *testing.T) {
 	s := setupTestScheduler(t)
 	s.Start()
@@ -69,7 +50,7 @@ func TestExecuteBlocks_CreateTask(t *testing.T) {
 	errMsg := s.ExecuteBlocks(text, 100, 5)
 	assert.Empty(t, errMsg)
 
-	display := strings.TrimSpace(scheduleBlockRe.ReplaceAllString(text, ""))
+	display := blocks.StripAll(text)
 	assert.Contains(t, display, "I'll set that up.")
 	assert.Contains(t, display, "Done!")
 	assert.NotContains(t, display, "nclaw:schedule")

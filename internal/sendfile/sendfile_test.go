@@ -40,7 +40,6 @@ func TestExecuteBlocks_SendsFile(t *testing.T) {
 	ExecuteBlocks(context.TODO(), Senders{Doc: sendDoc}, text, 42, 0, dir)
 
 	assert.True(t, sent)
-	assert.Equal(t, "text\n\nmore", StripBlocks(text))
 }
 
 func TestExecuteBlocks_SendsFileAbsolutePath(t *testing.T) {
@@ -60,7 +59,6 @@ func TestExecuteBlocks_SendsFileAbsolutePath(t *testing.T) {
 	ExecuteBlocks(context.TODO(), Senders{Doc: sendDoc}, text, 1, 0, dir)
 
 	assert.True(t, sent)
-	assert.Empty(t, StripBlocks(text))
 }
 
 func TestExecuteBlocks_PathTraversal(t *testing.T) {
@@ -90,15 +88,12 @@ func TestExecuteBlocks_SendDocError(t *testing.T) {
 	// Should not panic on sendDoc error.
 	ExecuteBlocks(context.TODO(), Senders{Doc: sendDoc}, text, 1, 0, dir)
 
-	// Block should still be stripped by StripBlocks.
-	assert.Equal(t, "before\n\nafter", StripBlocks(text))
 }
 
 func TestExecuteBlocks_InvalidJSON(t *testing.T) {
 	text := "text\n```nclaw:sendfile\n{invalid json}\n```\nmore"
 	// Should not panic on invalid JSON.
 	ExecuteBlocks(context.TODO(), Senders{Doc: noopSendDoc}, text, 1, 0, "")
-	assert.Equal(t, "text\n\nmore", StripBlocks(text))
 }
 
 func TestExecuteBlocks_NilSendDoc(t *testing.T) {
@@ -109,7 +104,6 @@ func TestExecuteBlocks_NilSendDoc(t *testing.T) {
 	text := "text\n```nclaw:sendfile\n{\"path\":\"test.txt\"}\n```\nmore"
 	// Should not panic with nil sendDoc.
 	ExecuteBlocks(context.TODO(), Senders{}, text, 1, 0, dir)
-	assert.Equal(t, "text\n\nmore", StripBlocks(text))
 }
 
 func TestExecuteBlocks_MediaGroup(t *testing.T) {
@@ -227,30 +221,4 @@ func TestIsAllowedPath(t *testing.T) {
 
 	// File outside both dirs is rejected.
 	assert.False(t, isAllowedPath("/etc/passwd", chatDir))
-}
-
-func TestBlockRegex(t *testing.T) {
-	input := "text\n```nclaw:sendfile\n{\"path\":\"file.txt\"}\n```\nmore"
-	matches := blockRe.FindAllStringSubmatch(input, -1)
-	assert.Len(t, matches, 1)
-	assert.Equal(t, "{\"path\":\"file.txt\"}", matches[0][1])
-}
-
-func TestBlockRegex_Multiple(t *testing.T) {
-	input := "```nclaw:sendfile\n{\"path\":\"a.txt\"}\n```\nmiddle\n```nclaw:sendfile\n{\"path\":\"b.txt\"}\n```"
-	matches := blockRe.FindAllStringSubmatch(input, -1)
-	assert.Len(t, matches, 2)
-	assert.Equal(t, "{\"path\":\"a.txt\"}", matches[0][1])
-	assert.Equal(t, "{\"path\":\"b.txt\"}", matches[1][1])
-}
-
-func TestStripBlocks(t *testing.T) {
-	reply := "before\n```nclaw:sendfile\n{\"path\":\"file.txt\"}\n```\nafter"
-	result := StripBlocks(reply)
-	assert.Equal(t, "before\n\nafter", result)
-}
-
-func TestStripBlocks_NoBlocks(t *testing.T) {
-	result := StripBlocks("plain text")
-	assert.Equal(t, "plain text", result)
 }

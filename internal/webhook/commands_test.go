@@ -2,7 +2,6 @@ package webhook
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -11,6 +10,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
+	"github.com/nickalie/nclaw/internal/blocks"
 	"github.com/nickalie/nclaw/internal/cli"
 	"github.com/nickalie/nclaw/internal/model"
 	"github.com/nickalie/nclaw/internal/pipeline"
@@ -54,25 +54,6 @@ func setupTestManager(t *testing.T) *Manager {
 	return mgr
 }
 
-func TestWebhookBlockRegex(t *testing.T) {
-	input := "text\n```nclaw:webhook\n{\"action\":\"create\"}\n```\nmore"
-	matches := webhookBlockRe.FindAllStringSubmatch(input, -1)
-	assert.Len(t, matches, 1)
-	assert.Equal(t, "{\"action\":\"create\"}", matches[0][1])
-}
-
-func TestWebhookBlockRegex_Multiple(t *testing.T) {
-	input := "```nclaw:webhook\n{\"action\":\"create\"}\n```\nmid\n```nclaw:webhook\n{\"action\":\"list\"}\n```"
-	matches := webhookBlockRe.FindAllStringSubmatch(input, -1)
-	assert.Len(t, matches, 2)
-}
-
-func TestWebhookBlockRegex_NoMatch(t *testing.T) {
-	input := "just text\n```go\nfmt.Println(\"hello\")\n```"
-	matches := webhookBlockRe.FindAllStringSubmatch(input, -1)
-	assert.Empty(t, matches)
-}
-
 func TestExecuteBlocks_CreateWebhookFull(t *testing.T) {
 	m := setupTestManager(t)
 	text := "Setting up.\n```nclaw:webhook\n" +
@@ -81,7 +62,7 @@ func TestExecuteBlocks_CreateWebhookFull(t *testing.T) {
 	statusMsg := m.ExecuteBlocks(text, 100, 5)
 	assert.Contains(t, statusMsg, "[Webhook created: https://example.com/webhooks/")
 
-	display := strings.TrimSpace(webhookBlockRe.ReplaceAllString(text, ""))
+	display := blocks.StripAll(text)
 	assert.Contains(t, display, "Setting up.")
 	assert.Contains(t, display, "Done!")
 	assert.NotContains(t, display, "nclaw:webhook")
