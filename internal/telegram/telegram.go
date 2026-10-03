@@ -3,7 +3,6 @@ package telegram
 import (
 	"fmt"
 	"path/filepath"
-	"strings"
 )
 
 // Prompt is the system prompt for formatting output as Telegram HTML.
@@ -24,28 +23,6 @@ Rules:
 
 // MaxMessageLen is the Telegram message size limit in characters.
 const MaxMessageLen = 4096
-
-// SplitMessage splits text into chunks of at most maxLen characters, breaking at newlines.
-func SplitMessage(text string, maxLen int) []string {
-	if len(text) <= maxLen {
-		return []string{text}
-	}
-
-	var chunks []string
-	for text != "" {
-		if len(text) <= maxLen {
-			chunks = append(chunks, text)
-			break
-		}
-		cut := strings.LastIndex(text[:maxLen], "\n")
-		if cut <= 0 {
-			cut = maxLen
-		}
-		chunks = append(chunks, text[:cut])
-		text = strings.TrimLeft(text[cut:], "\n")
-	}
-	return chunks
-}
 
 // ChatDir returns the session directory for a given chat/thread under the base data directory.
 func ChatDir(dataDir string, chatID int64, threadID int) string {

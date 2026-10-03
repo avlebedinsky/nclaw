@@ -216,12 +216,13 @@ func (p *Pipeline) sendReply(ctx context.Context, chatID int64, threadID int, te
 }
 
 func (p *Pipeline) sendChunk(ctx context.Context, chatID int64, threadID int, text string) {
-	for _, mode := range []string{"HTML", ""} {
-		if err := p.send(ctx, chatID, threadID, text, mode); err == nil {
-			return
-		} else {
-			log.Printf("pipeline: send parseMode=%q error: %v", mode, err)
-		}
+	err := p.send(ctx, chatID, threadID, text, "HTML")
+	if err == nil {
+		return
 	}
-	log.Printf("pipeline: failed to send message to chat=%d thread=%d (all modes failed)", chatID, threadID)
+	log.Printf("pipeline: send parseMode=HTML error: %v", err)
+
+	if err := p.send(ctx, chatID, threadID, telegram.PlainText(text), ""); err != nil {
+		log.Printf("pipeline: failed to send message to chat=%d thread=%d as plain text: %v", chatID, threadID, err)
+	}
 }

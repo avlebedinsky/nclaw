@@ -381,33 +381,6 @@ func TestHandleIncoming_Busy(t *testing.T) {
 	}
 }
 
-func TestSplitMessage_Short(t *testing.T) {
-	chunks := telegram.SplitMessage("hello", 100)
-	assert.Equal(t, []string{"hello"}, chunks)
-}
-
-func TestSplitMessage_ExactLimit(t *testing.T) {
-	text := "aaaaaaaaaa" // 10 chars
-	chunks := telegram.SplitMessage(text, 10)
-	assert.Equal(t, []string{text}, chunks)
-}
-
-func TestSplitMessage_SplitsAtNewline(t *testing.T) {
-	text := "aaaaa\nbbbbb" // 5 + newline + 5
-	chunks := telegram.SplitMessage(text, 6)
-	assert.Len(t, chunks, 2)
-	assert.Equal(t, "aaaaa", chunks[0])
-	assert.Equal(t, "bbbbb", chunks[1])
-}
-
-func TestSplitMessage_NoNewline(t *testing.T) {
-	text := "aaaaaaaaaabbbbbbbbbb" // 20 chars
-	chunks := telegram.SplitMessage(text, 10)
-	assert.Len(t, chunks, 2)
-	assert.Equal(t, "aaaaaaaaaa", chunks[0])
-	assert.Equal(t, "bbbbbbbbbb", chunks[1])
-}
-
 func TestExecuteBlocks_PauseTask(t *testing.T) {
 	m := setupTestManager(t)
 

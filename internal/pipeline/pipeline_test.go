@@ -240,6 +240,23 @@ func TestProcess_HTMLFallbackToPlainText(t *testing.T) {
 	assert.Equal(t, 2, callCount, "should try HTML then plain text")
 }
 
+func TestProcess_PlainFallbackStripsTags(t *testing.T) {
+	var plain []string
+	sendFn := func(_ context.Context, _ int64, _ int, text, parseMode string) error {
+		if parseMode == "HTML" {
+			return fmt.Errorf("HTML parse error")
+		}
+		plain = append(plain, text)
+		return nil
+	}
+	p := New(sendFn, sendfile.Senders{}, true)
+
+	result := &cli.Result{Text: "<b>Итог</b>: a &lt; b <p>", FullText: "<b>Итог</b>: a &lt; b <p>"}
+	p.Process(context.Background(), result, nil, 100, 0, "/tmp", false)
+
+	assert.Equal(t, []string{"Итог: a < b <p>"}, plain)
+}
+
 func TestProcess_MultipleExecutors(t *testing.T) {
 	exec1 := &mockExecutor{}
 	exec2 := &mockExecutor{}
