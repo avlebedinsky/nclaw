@@ -2,6 +2,7 @@ package webhook
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -12,31 +13,55 @@ import (
 
 	"github.com/nickalie/nclaw/internal/blocks"
 	"github.com/nickalie/nclaw/internal/cli"
+	"github.com/nickalie/nclaw/internal/invoker"
 	"github.com/nickalie/nclaw/internal/model"
 	"github.com/nickalie/nclaw/internal/pipeline"
 	"github.com/nickalie/nclaw/internal/sendfile"
 	"github.com/nickalie/nclaw/internal/telegram"
 )
 
-// mockProvider implements cli.Provider for testing.
-type mockProvider struct{}
+type mockProvider struct {
+	client *mockClient
+}
 
-func (m *mockProvider) NewClient() cli.Client    { return &mockClient{} }
+func (m *mockProvider) NewClient() cli.Client {
+	if m.client == nil {
+		m.client = &mockClient{}
+	}
+	return m.client
+}
 func (m *mockProvider) PreInvoke() error         { return nil }
 func (m *mockProvider) Version() (string, error) { return "mock-1.0.0", nil }
 func (m *mockProvider) Name() string             { return "mock" }
 
-// mockClient implements cli.Client for testing.
-type mockClient struct{}
+type mockClient struct {
+	mu           sync.Mutex
+	systemPrompt string
+	query        string
+}
 
-func (m *mockClient) Dir(string) cli.Client                { return m }
-func (m *mockClient) SkipPermissions() cli.Client          { return m }
-func (m *mockClient) AppendSystemPrompt(string) cli.Client { return m }
-func (m *mockClient) Ask(string) (*cli.Result, error) {
+func (m *mockClient) Dir(string) cli.Client       { return m }
+func (m *mockClient) SkipPermissions() cli.Client { return m }
+func (m *mockClient) AppendSystemPrompt(p string) cli.Client {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.systemPrompt = p
+	return m
+}
+func (m *mockClient) Ask(q string) (*cli.Result, error) { return m.Continue(q) }
+func (m *mockClient) Continue(q string) (*cli.Result, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.query = q
 	return &cli.Result{Text: "mock response", FullText: "mock response"}, nil
 }
-func (m *mockClient) Continue(string) (*cli.Result, error) {
-	return &cli.Result{Text: "mock response", FullText: "mock response"}, nil
+
+func newTestInvoker(t *testing.T, p cli.Provider) *invoker.Invoker {
+	t.Helper()
+	return invoker.New(p, telegram.NewChatLocker(), invoker.Options{
+		DataDir:  t.TempDir(),
+		TaskList: func(int64, int) string { return "Current scheduled tasks: none" },
+	})
 }
 
 func noopSend(_ context.Context, _ int64, _ int, _, _ string) error { return nil }
@@ -49,7 +74,7 @@ func setupTestManager(t *testing.T) *Manager {
 	require.NoError(t, err)
 	require.NoError(t, database.AutoMigrate(&model.WebhookRegistration{}))
 
-	mgr := NewManager(database, &mockProvider{}, "example.com", t.TempDir(), telegram.NewChatLocker())
+	mgr := NewManager(database, newTestInvoker(t, &mockProvider{}), "example.com")
 	mgr.SetPipeline(pipeline.New(noopSend, sendfile.Senders{}, true))
 	return mgr
 }
@@ -552,4 +577,27 @@ func TestBuildIncomingPrompt_EmptyQuery(t *testing.T) {
 
 	prompt := buildIncomingPrompt(wh, req)
 	assert.NotContains(t, prompt, "Query Parameters:")
+}
+
+func TestProcessIncoming_UsesSharedPromptAndDeliversReply(t *testing.T) {
+	database, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	require.NoError(t, err)
+	require.NoError(t, database.AutoMigrate(&model.WebhookRegistration{}))
+
+	provider := &mockProvider{}
+	m := NewManager(database, newTestInvoker(t, provider), "example.com")
+	var sent []string
+	m.SetPipeline(pipeline.New(func(_ context.Context, _ int64, _ int, text, _ string) error {
+		sent = append(sent, text)
+		return nil
+	}, sendfile.Senders{}, true))
+
+	wh, err := m.Create("GitHub push", 100, 5)
+	require.NoError(t, err)
+	m.processIncoming(wh, IncomingRequest{Method: "POST", Body: `{"ref":"main"}`})
+
+	assert.Equal(t, []string{"mock response"}, sent)
+	assert.Contains(t, provider.client.systemPrompt, telegram.Prompt)
+	assert.Contains(t, provider.client.systemPrompt, "Current scheduled tasks: none")
+	assert.Contains(t, provider.client.query, `Body:`+"\n"+`{"ref":"main"}`)
 }

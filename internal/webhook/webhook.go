@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -14,9 +13,9 @@ import (
 
 	"github.com/nickalie/nclaw/internal/cli"
 	"github.com/nickalie/nclaw/internal/db"
+	"github.com/nickalie/nclaw/internal/invoker"
 	"github.com/nickalie/nclaw/internal/model"
 	"github.com/nickalie/nclaw/internal/pipeline"
-	"github.com/nickalie/nclaw/internal/telegram"
 )
 
 // IncomingRequest holds the data from an incoming webhook HTTP request.
@@ -52,27 +51,20 @@ var sensitiveSubstrings = []string{"token", "secret", "signature", "api-key", "a
 // Manager handles webhook registration and incoming webhook processing.
 type Manager struct {
 	db         *gorm.DB
-	provider   cli.Provider
+	invoker    *invoker.Invoker
 	pipeline   *pipeline.Pipeline
 	baseDomain string
-	dataDir    string
 	sem        chan struct{}
 	wg         sync.WaitGroup
-	chatLocker *telegram.ChatLocker
 }
 
 // NewManager creates a new webhook Manager.
-func NewManager(
-	database *gorm.DB, provider cli.Provider,
-	baseDomain, dataDir string, chatLocker *telegram.ChatLocker,
-) *Manager {
+func NewManager(database *gorm.DB, inv *invoker.Invoker, baseDomain string) *Manager {
 	return &Manager{
 		db:         database,
-		provider:   provider,
+		invoker:    inv,
 		baseDomain: baseDomain,
-		dataDir:    dataDir,
 		sem:        make(chan struct{}, maxConcurrentWebhooks),
-		chatLocker: chatLocker,
 	}
 }
 
@@ -158,44 +150,20 @@ func (m *Manager) processIncoming(wh *model.WebhookRegistration, req IncomingReq
 		return
 	}
 
-	result, cliErr := m.callCLI(wh, req)
-
-	if result == nil {
-		result = &cli.Result{}
+	out := m.invoker.Run(context.Background(), invoker.Request{
+		ChatID:   wh.ChatID,
+		ThreadID: wh.ThreadID,
+		Prompt:   buildIncomingPrompt(wh, req),
+	})
+	result := out.Result
+	if out.Err != nil && result.Text == "" {
+		result = &cli.Result{Text: "Webhook processing failed", FullText: "Webhook processing failed"}
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	dir := telegram.ChatDir(m.dataDir, wh.ChatID, wh.ThreadID)
-	m.pipeline.Process(ctx, result, cliErr, wh.ChatID, wh.ThreadID, dir, false)
-}
-
-func (m *Manager) callCLI(wh *model.WebhookRegistration, req IncomingRequest) (*cli.Result, error) {
-	unlock := m.chatLocker.Lock(wh.ChatID, wh.ThreadID)
-	defer unlock()
-
-	prompt := buildIncomingPrompt(wh, req)
-
-	dir := telegram.ChatDir(m.dataDir, wh.ChatID, wh.ThreadID)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		log.Printf("webhook: mkdir %s: %v", dir, err)
-		return &cli.Result{}, fmt.Errorf("webhook: mkdir: %w", err)
-	}
-
-	if err := m.provider.PreInvoke(); err != nil {
-		log.Printf("webhook: pre-invoke warning: %v", err)
-	}
-
-	result, err := m.provider.NewClient().Dir(dir).SkipPermissions().AppendSystemPrompt(telegram.Prompt).Continue(prompt)
-	if err != nil {
-		log.Printf("webhook: %s error for %s: %v", m.provider.Name(), wh.ID, err)
-		if result == nil || result.Text == "" {
-			result = &cli.Result{Text: "Webhook processing failed", FullText: "Webhook processing failed"}
-		}
-	}
-
-	return result, err
+	m.pipeline.Process(ctx, result, out.Err, wh.ChatID, wh.ThreadID, out.Dir, false)
 }
 
 func isSensitiveHeader(name string) bool {

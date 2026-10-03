@@ -102,7 +102,7 @@ func setupBot(database *gorm.DB, provider cli.Provider) (*bot.Bot, *scheduler.Sc
 		log.Fatal("scheduler: ", err)
 	}
 
-	webhookMgr := createWebhookManager(database, provider, chatLocker)
+	webhookMgr := createWebhookManager(database, inv)
 	p := buildPipeline(b, fileSenders, sched, webhookMgr)
 	h.Pipeline = p
 	sched.SetPipeline(p)
@@ -297,12 +297,12 @@ func newPipelineSendFunc(b *bot.Bot) pipeline.SendFunc {
 	}
 }
 
-func createWebhookManager(database *gorm.DB, provider cli.Provider, chatLocker *telegram.ChatLocker) *webhook.Manager {
+func createWebhookManager(database *gorm.DB, inv *invoker.Invoker) *webhook.Manager {
 	domain := config.WebhookBaseDomain()
 	if domain == "" {
 		return nil
 	}
-	return webhook.NewManager(database, provider, domain, config.DataDir(), chatLocker)
+	return webhook.NewManager(database, inv, domain)
 }
 
 func startWebhookServer(mgr *webhook.Manager) *webhook.Server {
