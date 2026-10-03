@@ -63,7 +63,7 @@ func (h *Handler) processMessage(ctx context.Context, b *bot.Bot, msg *models.Me
 	go sendTyping(typingCtx, b, chatID, threadID)
 
 	prompt := buildPrompt(ctx, b, text, att, dir)
-	log.Printf("handler: received message from chat=%d thread=%d text=%q hasFile=%v", chatID, threadID, text, att != nil)
+	log.Printf("handler: received message from chat=%d thread=%d text_len=%d hasFile=%v", chatID, threadID, len(text), att != nil)
 
 	unlock := h.ChatLocker.Lock(chatID, threadID)
 	result, streamed, cliErr := h.callCLI(ctx, dir, prompt, chatID, threadID)

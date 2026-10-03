@@ -1,13 +1,16 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -973,4 +976,104 @@ func TestSendTyping_StopsOnCancel(t *testing.T) {
 		t.Fatal("sendTyping did not stop after context cancel")
 	}
 	assert.GreaterOrEqual(t, called, 1, "should have called sendChatAction at least once")
+}
+
+// --- attachment naming and token redaction tests ---
+
+func TestLocalName(t *testing.T) {
+	cases := []struct {
+		name, filename, uid, want string
+	}{
+		{"photo with uid", "photo.jpg", "AgADx1", "photo_AgADx1.jpg"},
+		{"no uid keeps name", "report.pdf", "", "report.pdf"},
+		{"strips directories", "../../etc/passwd", "u1", "passwd_u1"},
+		{"empty name", "", "u1", "file_u1"},
+		{"dot dot", "..", "u1", "file_u1"},
+		{"multiple dots", "archive.tar.gz", "u1", "archive.tar_u1.gz"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, localName(&attachment{filename: tc.filename, fileUniqueID: tc.uid}))
+		})
+	}
+}
+
+func newFileServer(t *testing.T, contents map[string]string) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "getFile") {
+			require.NoError(t, r.ParseMultipartForm(1<<20))
+			id := r.FormValue("file_id")
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprintf(w, `{"ok":true,"result":{"file_id":%q,"file_path":"photos/%s.jpg"}}`, id, id)
+			return
+		}
+		for id, body := range contents {
+			if strings.HasSuffix(r.URL.Path, "/photos/"+id+".jpg") {
+				_, _ = w.Write([]byte(body))
+				return
+			}
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestDownloadAttachment_AlbumPhotosDoNotOverwrite(t *testing.T) {
+	srv := newFileServer(t, map[string]string{"f1": "first", "f2": "second"})
+	b, err := bot.New("123:SECRET", bot.WithServerURL(srv.URL), bot.WithSkipGetMe())
+	require.NoError(t, err)
+	dir := t.TempDir()
+
+	atts := []*attachment{
+		{fileID: "f1", fileUniqueID: "u1", filename: "photo.jpg"},
+		{fileID: "f2", fileUniqueID: "u2", filename: "photo.jpg"},
+	}
+	paths := make([]string, len(atts))
+	var wg sync.WaitGroup
+	for i, att := range atts {
+		wg.Go(func() {
+			p, err := downloadAttachment(context.Background(), b, att, dir)
+			assert.NoError(t, err)
+			paths[i] = p
+		})
+	}
+	wg.Wait()
+
+	require.NotEqual(t, paths[0], paths[1])
+	for i, want := range []string{"first", "second"} {
+		got, err := os.ReadFile(paths[i])
+		require.NoError(t, err)
+		assert.Equal(t, want, string(got))
+	}
+	leftovers, err := filepath.Glob(filepath.Join(dir, "*.part"))
+	require.NoError(t, err)
+	assert.Empty(t, leftovers)
+}
+
+func TestDownloadAttachment_DoesNotLogBotToken(t *testing.T) {
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	srv := newFileServer(t, map[string]string{"f1": "data"})
+	b, err := bot.New("123:SECRET", bot.WithServerURL(srv.URL), bot.WithSkipGetMe())
+	require.NoError(t, err)
+
+	_, err = downloadAttachment(context.Background(), b, &attachment{fileID: "f1", fileUniqueID: "u1", filename: "photo.jpg"}, t.TempDir())
+	require.NoError(t, err)
+
+	assert.NotContains(t, logs.String(), "SECRET")
+}
+
+func TestFetchToFile_ErrorOmitsURL(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	link := srv.URL + "/file/bot123:SECRET/photos/f1.jpg"
+	srv.Close()
+
+	err := fetchToFile(context.Background(), link, filepath.Join(t.TempDir(), "out.jpg"))
+
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "SECRET")
 }
