@@ -128,19 +128,14 @@ ENTRYPOINT ["tini", "--", "nclaw"]
 FROM base AS claude
 RUN curl -fsSL https://claude.ai/install.sh | bash
 RUN set -eux; \
-    arch="$(apk --print-arch)"; \
-    case "$arch" in \
-        x86_64) asset_arch='x86_64|amd64' ;; \
-        aarch64) asset_arch='arm64|aarch64' ;; \
-        *) echo "unsupported fya architecture: $arch" >&2; exit 1 ;; \
+    case "$(apk --print-arch)" in \
+        x86_64) arch=amd64 ;; \
+        aarch64) arch=arm64 ;; \
+        *) echo "unsupported fya architecture" >&2; exit 1 ;; \
     esac; \
-    url="$(curl -fsSL https://api.github.com/repos/umputun/fya/releases/latest \
-        | grep -Eo '"browser_download_url": *"[^"]+"' \
-        | cut -d '"' -f 4 \
-        | grep -Ei "linux_(${asset_arch}).*\\.tar\\.gz$" \
-        | head -n 1)"; \
-    test -n "$url"; \
-    curl -fsSL "$url" -o /tmp/fya.tar.gz; \
+    tag="$(curl -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/umputun/fya/releases/latest)"; \
+    tag="${tag##*/}"; \
+    curl -fsSL "https://github.com/umputun/fya/releases/download/${tag}/fya_${tag#v}_linux_${arch}.tar.gz" -o /tmp/fya.tar.gz; \
     tar -xzf /tmp/fya.tar.gz -C /usr/local/bin fya; \
     chmod +x /usr/local/bin/fya; \
     rm /tmp/fya.tar.gz
