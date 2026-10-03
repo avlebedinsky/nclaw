@@ -12,6 +12,7 @@ var (
 	_ cli.Provider             = (*Provider)(nil)
 	_ cli.NativeSkillsProvider = (*Provider)(nil)
 	_ cli.SessionStore         = (*Provider)(nil)
+	_ cli.AuthProvider         = (*Provider)(nil)
 )
 
 // NewProvider creates a new Claude CLI provider.

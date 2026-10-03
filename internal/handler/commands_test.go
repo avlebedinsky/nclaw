@@ -177,6 +177,18 @@ func TestStatusCommand(t *testing.T) {
 	assert.Equal(t, "💤 Idle.\nBackend: mock.", sent.all()[0])
 }
 
+func TestStatusCommand_ShowsSignInExpiry(t *testing.T) {
+	sent := &safeSent{}
+	h := newTestHandler(t, &mockProvider{client: &mockClient{}}, nil)
+	h.Send = sent.send
+	h.AuthStatus = func() string { return "Claude sign-in: valid until Fri 9 Oct 18:06 MSK (5 days left)." }
+
+	h.Command(context.Background(), nil, commandUpdate("/status"))
+
+	require.Eventually(t, func() bool { return len(sent.all()) == 1 }, 5*time.Second, 10*time.Millisecond)
+	assert.Equal(t, "💤 Idle.\nBackend: mock.\nClaude sign-in: valid until Fri 9 Oct 18:06 MSK (5 days left).", sent.all()[0])
+}
+
 func TestHumanBytes(t *testing.T) {
 	assert.Equal(t, "512 B", humanBytes(512))
 	assert.Equal(t, "1.5 KB", humanBytes(1536))

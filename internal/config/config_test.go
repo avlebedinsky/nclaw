@@ -369,3 +369,28 @@ func TestLiveDrafts_DefaultsToEnabled(t *testing.T) {
 	defer viper.Reset()
 	assert.False(t, LiveDrafts())
 }
+
+func TestAdminChatID_DefaultsToFirstPrivateWhitelistedChat(t *testing.T) {
+	viper.Reset()
+	defer viper.Reset()
+	viper.Set("telegram.whitelist_chat_ids", "-1001234,555,777")
+
+	assert.Equal(t, int64(555), AdminChatID())
+}
+
+func TestAdminChatID_Explicit(t *testing.T) {
+	viper.Reset()
+	defer viper.Reset()
+	viper.Set("telegram.whitelist_chat_ids", "555")
+	viper.Set("admin_chat_id", "999")
+
+	assert.Equal(t, int64(999), AdminChatID())
+}
+
+func TestAdminChatID_NoneWithoutPrivateChat(t *testing.T) {
+	viper.Reset()
+	defer viper.Reset()
+	viper.Set("telegram.whitelist_chat_ids", "-100")
+
+	assert.Zero(t, AdminChatID())
+}

@@ -43,6 +43,7 @@ type Pipeline struct {
 	webhooksConfigured bool
 	streamMessages     bool
 	dataDir            string
+	failureHint        func(output string) string
 }
 
 // New creates a Pipeline. Nil executors are silently filtered out.
@@ -77,6 +78,12 @@ func (p *Pipeline) SetStreamMessages(enabled bool) {
 // the chat's directory within it. Without it, the run's own directory is the limit.
 func (p *Pipeline) SetDataDir(dir string) {
 	p.dataDir = dir
+}
+
+// SetFailureHint sets a function that, given the output of a failed run, returns a
+// note to add to its reply, or "" when there is nothing to add.
+func (p *Pipeline) SetFailureHint(hint func(output string) string) {
+	p.failureHint = hint
 }
 
 func (p *Pipeline) chatRoot(chatID int64, threadID int, dir string) string {
@@ -138,6 +145,9 @@ func (p *Pipeline) Process(
 ) {
 	// Phase 1: Execute command blocks (only on success).
 	statusMsgs := p.executeBlocks(ctx, result, cliErr, dest.ChatID, dest.ThreadID, dir)
+	if hint := p.hintFor(result, cliErr); hint != "" {
+		statusMsgs = append(statusMsgs, hint)
+	}
 
 	// Phase 2: Strip all command block syntax from each display message.
 	// When already streamed live, skip re-sending the display messages.
@@ -180,6 +190,13 @@ func (p *Pipeline) executeBlocks(
 	}
 
 	return statusMsgs
+}
+
+func (p *Pipeline) hintFor(result *cli.Result, cliErr error) string {
+	if cliErr == nil || p.failureHint == nil {
+		return ""
+	}
+	return p.failureHint(result.Text)
 }
 
 // displayTexts returns the stripped, non-empty messages to send. When stream

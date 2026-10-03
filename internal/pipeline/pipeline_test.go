@@ -491,3 +491,46 @@ func TestProcess_ShortAnswerStaysInChat(t *testing.T) {
 	assert.False(t, docSent)
 	assert.Len(t, ms.calls, 2)
 }
+
+func authHint(output string) string {
+	if strings.Contains(output, "Failed to authenticate") {
+		return "🔑 sign in again"
+	}
+	return ""
+}
+
+func TestProcess_FailureHintAddedToFailedRun(t *testing.T) {
+	ms := &mockSend{}
+	p := New(ms.fn(), sendfile.Senders{}, true)
+	p.SetFailureHint(authHint)
+
+	result := &cli.Result{Text: "Failed to authenticate: OAuth session expired"}
+	p.Process(context.Background(), result, errors.New("exit status 1"), Dest{ChatID: 100}, "/tmp", false)
+
+	require.Len(t, ms.calls, 1)
+	assert.Equal(t, "Failed to authenticate: OAuth session expired\n\n🔑 sign in again", ms.calls[0].text)
+}
+
+func TestProcess_FailureHintSentEvenWhenStreamed(t *testing.T) {
+	ms := &mockSend{}
+	p := New(ms.fn(), sendfile.Senders{}, true)
+	p.SetFailureHint(authHint)
+
+	result := &cli.Result{Text: "Failed to authenticate"}
+	p.Process(context.Background(), result, errors.New("exit status 1"), Dest{ChatID: 100}, "/tmp", true)
+
+	require.Len(t, ms.calls, 1)
+	assert.Equal(t, "🔑 sign in again", ms.calls[0].text)
+}
+
+func TestProcess_FailureHintIgnoredOnSuccess(t *testing.T) {
+	ms := &mockSend{}
+	p := New(ms.fn(), sendfile.Senders{}, true)
+	p.SetFailureHint(authHint)
+
+	result := &cli.Result{Text: "Failed to authenticate with Gmail, so here is what I could do", FullText: "x"}
+	p.Process(context.Background(), result, nil, Dest{ChatID: 100}, "/tmp", false)
+
+	require.Len(t, ms.calls, 1)
+	assert.NotContains(t, ms.calls[0].text, "sign in again")
+}

@@ -116,7 +116,13 @@ func (h *Handler) newSession(key chatqueue.Key) {
 func (h *Handler) status(key chatqueue.Key) {
 	snap := h.Queue.Snapshot(key)
 	size, hasSize := h.Invoker.SessionSize(key.ChatID, key.ThreadID)
-	go h.notify(key, statusText(&snap, size, hasSize, h.Invoker.MaxSessionBytes(), h.Invoker.ProviderName()))
+	text := statusText(&snap, size, hasSize, h.Invoker.MaxSessionBytes(), h.Invoker.ProviderName())
+	if h.AuthStatus != nil {
+		if line := h.AuthStatus(); line != "" {
+			text += "\n" + line
+		}
+	}
+	go h.notify(key, text)
 }
 
 func statusText(snap *chatqueue.Snapshot, size int64, hasSize bool, maxBytes int64, backend string) string {

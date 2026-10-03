@@ -36,6 +36,7 @@ type Handler struct {
 	Transcriber Transcriber
 	React       MessageReactor
 	Drafts      draft.API
+	AuthStatus  func() string
 }
 
 // MessageReactor sets the bot's reaction on a message; an empty emoji clears it.

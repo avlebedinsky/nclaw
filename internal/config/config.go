@@ -70,6 +70,21 @@ func WhitelistChatIDs() []int64 {
 	return ids
 }
 
+// AdminChatID returns the chat that receives the bot's own alerts, such as an expiring
+// sign-in (env: NCLAW_ADMIN_CHAT_ID). By default it is the first private chat (positive
+// ID) in the whitelist; 0 means there is none.
+func AdminChatID() int64 {
+	if viper.IsSet("admin_chat_id") {
+		return viper.GetInt64("admin_chat_id")
+	}
+	for _, id := range WhitelistChatIDs() {
+		if id > 0 {
+			return id
+		}
+	}
+	return 0
+}
+
 // StartupNotification reports whether the bot should send a startup
 // notification message to whitelisted chats (env: NCLAW_STARTUP_NOTIFICATION).
 // Disabled by default.

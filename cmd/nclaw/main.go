@@ -17,6 +17,7 @@ import (
 	"github.com/go-telegram/bot/models"
 	"gorm.io/gorm"
 
+	"github.com/nickalie/nclaw/internal/authwatch"
 	"github.com/nickalie/nclaw/internal/chatqueue"
 	"github.com/nickalie/nclaw/internal/cli"
 	"github.com/nickalie/nclaw/internal/cli/claude"
@@ -78,6 +79,7 @@ func main() {
 
 	log.Printf("nclaw bot started (%s, %s: %s)", version.String(), provider.Name(), cliVer)
 	sendStartupNotifications(a.bot)
+	a.startWatchers(ctx)
 	a.bot.Start(ctx)
 	stop()
 
@@ -95,6 +97,13 @@ type app struct {
 	sched      *scheduler.Scheduler
 	webhookMgr *webhook.Manager
 	webhookSrv *webhook.Server
+	authWatch  *authwatch.Watcher
+}
+
+func (a *app) startWatchers(ctx context.Context) {
+	if a.authWatch != nil {
+		go a.authWatch.Run(ctx)
+	}
 }
 
 func (a *app) shutdown(timeout time.Duration) {
@@ -168,6 +177,7 @@ func setupBot(database *gorm.DB, provider cli.Provider) *app {
 	if webhookMgr != nil {
 		webhookMgr.SetPipeline(p)
 	}
+	authWatch := wireAuth(provider, h, p, loc)
 
 	// Load tasks and start scheduler before webhook server to avoid a race where
 	// an incoming webhook creates a task that LoadTasks then re-registers as a duplicate job.
@@ -177,7 +187,40 @@ func setupBot(database *gorm.DB, provider cli.Provider) *app {
 	// Start webhook HTTP server after pipeline is wired and scheduler is loaded.
 	webhookSrv := startWebhookServer(webhookMgr)
 
-	return &app{bot: b, handler: h, queue: queue, sched: sched, webhookMgr: webhookMgr, webhookSrv: webhookSrv}
+	return &app{bot: b, handler: h, queue: queue, sched: sched, webhookMgr: webhookMgr, webhookSrv: webhookSrv, authWatch: authWatch}
+}
+
+const signInRenewHint = "To sign in again, run claude auth login inside the bot's container."
+
+func wireAuth(provider cli.Provider, h *handler.Handler, p *pipeline.Pipeline, loc *time.Location) *authwatch.Watcher {
+	auth, ok := provider.(cli.AuthProvider)
+	if !ok {
+		return nil
+	}
+	p.SetFailureHint(func(output string) string {
+		if auth.IsAuthFailure(output) {
+			return "🔑 The bot's Claude sign-in has expired or was revoked. " + signInRenewHint
+		}
+		return ""
+	})
+
+	admin := config.AdminChatID()
+	w := authwatch.New(authwatch.Options{
+		Name:      "Claude",
+		Expiry:    auth.AuthExpiry,
+		RenewHint: signInRenewHint,
+		Location:  loc,
+		Notify: func(ctx context.Context, text string) error {
+			return h.Send(ctx, pipeline.Dest{ChatID: admin}, text, "")
+		},
+	})
+	h.AuthStatus = w.Status
+	if admin == 0 {
+		log.Println("authwatch: no admin chat, sign-in expiry warnings are off (set NCLAW_ADMIN_CHAT_ID)")
+		return nil
+	}
+	log.Printf("authwatch: sign-in expiry warnings go to chat %d", admin)
+	return w
 }
 
 func newTranscriber() handler.Transcriber {

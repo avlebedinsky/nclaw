@@ -68,6 +68,14 @@ type SessionStore interface {
 	ArchiveSession(dir string) error
 }
 
+// AuthProvider is implemented by providers whose stored sign-in expires on a known date.
+type AuthProvider interface {
+	// AuthExpiry returns when the stored sign-in stops working; ok is false when it is unknown.
+	AuthExpiry() (expiry time.Time, ok bool)
+	// IsAuthFailure reports whether the output of a failed run is the backend's sign-in error.
+	IsAuthFailure(output string) bool
+}
+
 // EphemeralClient is implemented by clients that can run without persisting the
 // session, so one-off runs leave no conversation behind.
 type EphemeralClient interface {

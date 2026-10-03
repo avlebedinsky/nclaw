@@ -58,6 +58,7 @@ Three input channels (handler, scheduler, webhook) put their work into a per-cha
 - `internal/invoker/` - Single entry point for CLI runs: working dir (`.isolated` for isolated tasks), system prompt, time header, session reset, timeout
 - `internal/handler/` - Telegram message handling, prompt composition (batches, albums, voice transcripts), bot commands (`/stop`, `/new`, `/status`), shutdown notices
 - `internal/progress/` - Status message edited as tool calls stream in
+- `internal/authwatch/` - Warns the admin chat before the backend's stored sign-in expires
 - `internal/transcribe/` - Voice/video-note transcription with ffmpeg + whisper.cpp
 - `internal/skills/` - Installs bundled skills that are missing into the CLI skills dirs at startup
 - `internal/blocks/` - Command block patterns (`nclaw:schedule`, `nclaw:webhook`, `nclaw:sendfile`) shared by all packages
@@ -72,7 +73,7 @@ Three input channels (handler, scheduler, webhook) put their work into a per-cha
 ## Key Patterns
 
 ### CLI Backend Interface (`internal/cli/`)
-All CLI backends implement two interfaces: `cli.Client` (per-request builder with `Context()`, `Dir()`, `SkipPermissions()`, `AppendSystemPrompt()`, `Ask()`, `Continue()`) and `cli.Provider` (singleton with `NewClient()`, `PreInvoke()`, `Version()`, `Name()`). The `*cli.Result` struct has `Text` (final message for display) and `FullText` (all messages for command block scanning). Consumers use only these interfaces, making them backend-agnostic. Optional capabilities are discovered by type assertion instead of backend names: `NativeSkillsProvider`, `SessionStore` (session size/archive), `StreamingClient` (`OnMessage`), `ProgressClient` (`OnToolUse`), `EphemeralClient` (no session persistence).
+All CLI backends implement two interfaces: `cli.Client` (per-request builder with `Context()`, `Dir()`, `SkipPermissions()`, `AppendSystemPrompt()`, `Ask()`, `Continue()`) and `cli.Provider` (singleton with `NewClient()`, `PreInvoke()`, `Version()`, `Name()`). The `*cli.Result` struct has `Text` (final message for display) and `FullText` (all messages for command block scanning). Consumers use only these interfaces, making them backend-agnostic. Optional capabilities are discovered by type assertion instead of backend names: `NativeSkillsProvider`, `SessionStore` (session size/archive), `StreamingClient` (`OnMessage`), `ProgressClient` (`OnToolUse`), `EphemeralClient` (no session persistence), `AuthProvider` (sign-in expiry and sign-in error detection).
 
 ### CLI Adapters
 - **Claude** (`internal/cli/claude/`): Stream-json output parsing via shared `streamjson` package. Claude-specific methods (`Model`, `FallbackModel`, `Resume`) remain on the concrete `*Claude` type. `PreInvoke()` handles OAuth token refresh.
@@ -83,6 +84,8 @@ All CLI backends implement two interfaces: `cli.Client` (per-request builder wit
 
 ### OAuth Token Refresh
 Before each Claude CLI invocation, `claude.EnsureValidToken()` (called via `Provider.PreInvoke()`) proactively refreshes the OAuth token if it expires within 5 minutes. Credentials are read from `$CLAUDE_CONFIG_DIR/.credentials.json` (default `~/.claude`) using field-preserving JSON round-tripping. The refresh is skipped when `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_AUTH_TOKEN` or `ANTHROPIC_API_KEY` is set. Refresh failures are logged as warnings and do not block the CLI call. Codex and Copilot providers have no-op `PreInvoke()`.
+
+The refresh token itself ends at `claudeAiOauth.refreshTokenExpiresAt`, which refreshing does not extend. The Claude provider implements `cli.AuthProvider`: `authwatch` reads that date every 6 hours and warns the admin chat 5, 2 and 1 day ahead and once it has passed, `/status` shows it, and the pipeline appends a sign-in hint to a failed run whose output is the CLI's authentication error.
 
 ### Chat Queue, Invoker and Commands
 Telegram updates are dispatched synchronously (`bot.WithNotAsyncHandlers`); the whitelist is a bot middleware. `Handler.Default` only enqueues: user messages wait a short settle window (longer for albums) and everything queued while a run is busy is answered in one combined prompt. Scheduler and webhook runs are `chatqueue.Job`s in the same lane. `/stop` cancels the lane's run (`procrun` signals the CLI's process group) and drops the queue, `/new` queues a session reset, `/status` reports the lane state. On SIGTERM the queue is closed, interrupted chats are notified, and running work gets up to 20s. Every CLI run gets the shared system prompt (Telegram formatting, scheduler timezone, task list, skills for non-native backends) plus a current-time header, and is limited by `NCLAW_CLI_TIMEOUT`. Isolated scheduled tasks run in `<chat>/.isolated` so they never become the chat's latest session.
@@ -125,6 +128,7 @@ Optional:
 - `NCLAW_MODEL_SUBAGENT` - Claudish subagent model override
 - `NCLAW_COPILOT_MODEL` - Model for Copilot backend (e.g. `gpt-4.1`)
 - `NCLAW_TELEGRAM_WHITELIST_CHAT_IDS` - Comma-separated list of allowed Telegram chat IDs (if unset, bot accepts all chats with a security warning)
+- `NCLAW_ADMIN_CHAT_ID` - Chat for the bot's own alerts, e.g. the Claude sign-in about to expire (default: first positive ID in the whitelist; none disables the alerts)
 - `NCLAW_STARTUP_NOTIFICATION` - Send a "bot started" notification to whitelisted chats on startup (default: `false`)
 - `NCLAW_STREAM_MESSAGES` - Send every assistant message from the CLI's JSON stream as a separate reply instead of only the final one (default: `false`). For Claude/Claudish in the Telegram handler, messages are delivered live as they arrive (real-time streaming); other backends/channels split the final buffered output
 - `NCLAW_DB_PATH` - SQLite path (default: `{data_dir}/nclaw.db`)
