@@ -25,13 +25,25 @@ func bundled(t *testing.T) string {
 	return src
 }
 
+func stateFile(t *testing.T) string {
+	t.Helper()
+	return filepath.Join(t.TempDir(), "data", ".nclaw-skills.json")
+}
+
+func readSchedule(t *testing.T, dest string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(dest, "schedule", "SKILL.md"))
+	require.NoError(t, err)
+	return string(data)
+}
+
 func TestInstall_CopiesMissingSkills(t *testing.T) {
 	src, dest := bundled(t), filepath.Join(t.TempDir(), "skills")
 
-	installed, err := Install(src, dest)
+	rep, err := Install(src, dest, stateFile(t))
 
 	require.NoError(t, err)
-	assert.ElementsMatch(t, []string{"schedule", "send-file"}, installed)
+	assert.ElementsMatch(t, []string{"schedule", "send-file"}, rep.Installed)
 	data, err := os.ReadFile(filepath.Join(dest, "schedule", "SKILL.md"))
 	require.NoError(t, err)
 	assert.Equal(t, "bundled schedule", string(data))
@@ -49,40 +61,133 @@ func TestInstall_KeepsCustomizedSkill(t *testing.T) {
 	src, dest := bundled(t), t.TempDir()
 	writeFile(t, filepath.Join(dest, "schedule", "SKILL.md"), "my timezone tweaks", 0o644)
 
-	installed, err := Install(src, dest)
+	rep, err := Install(src, dest, stateFile(t))
 
 	require.NoError(t, err)
-	assert.Equal(t, []string{"send-file"}, installed)
-	data, err := os.ReadFile(filepath.Join(dest, "schedule", "SKILL.md"))
-	require.NoError(t, err)
-	assert.Equal(t, "my timezone tweaks", string(data))
+	assert.Equal(t, []string{"send-file"}, rep.Installed)
+	assert.Equal(t, []string{"schedule"}, rep.Kept)
+	assert.Equal(t, "my timezone tweaks", readSchedule(t, dest))
 }
 
 func TestInstall_SkipsDanglingLink(t *testing.T) {
 	src, dest := bundled(t), t.TempDir()
 	require.NoError(t, os.Symlink("../../.agents/skills/schedule", filepath.Join(dest, "schedule")))
 
-	installed, err := Install(src, dest)
+	rep, err := Install(src, dest, stateFile(t))
 
 	require.NoError(t, err)
-	assert.Equal(t, []string{"send-file"}, installed)
+	assert.Equal(t, []string{"send-file"}, rep.Installed)
+	assert.Equal(t, []string{"schedule"}, rep.Kept)
 }
 
 func TestInstall_MissingSource(t *testing.T) {
-	installed, err := Install(filepath.Join(t.TempDir(), "missing"), t.TempDir())
+	rep, err := Install(filepath.Join(t.TempDir(), "missing"), t.TempDir(), stateFile(t))
 	require.NoError(t, err)
-	assert.Empty(t, installed)
+	assert.Empty(t, rep)
 }
 
 func TestInstall_IsIdempotent(t *testing.T) {
-	src, dest := bundled(t), t.TempDir()
-	_, err := Install(src, dest)
+	src, dest, st := bundled(t), t.TempDir(), stateFile(t)
+	_, err := Install(src, dest, st)
 	require.NoError(t, err)
 
-	installed, err := Install(src, dest)
+	rep, err := Install(src, dest, st)
 
 	require.NoError(t, err)
-	assert.Empty(t, installed)
+	assert.Empty(t, rep)
+}
+
+func TestInstall_UpdatesUntouchedCopy(t *testing.T) {
+	src, dest, st := bundled(t), t.TempDir(), stateFile(t)
+	_, err := Install(src, dest, st)
+	require.NoError(t, err)
+	writeFile(t, filepath.Join(src, "schedule", "SKILL.md"), "schedule v2", 0o644)
+	writeFile(t, filepath.Join(src, "schedule", "examples.md"), "new file", 0o644)
+
+	rep, err := Install(src, dest, st)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"schedule"}, rep.Updated)
+	assert.Equal(t, "schedule v2", readSchedule(t, dest))
+	assert.FileExists(t, filepath.Join(dest, "schedule", "examples.md"))
+	leftovers, err := filepath.Glob(filepath.Join(dest, ".*"))
+	require.NoError(t, err)
+	assert.Empty(t, leftovers)
+}
+
+func TestInstall_KeepsCopyChangedAfterInstall(t *testing.T) {
+	src, dest, st := bundled(t), t.TempDir(), stateFile(t)
+	_, err := Install(src, dest, st)
+	require.NoError(t, err)
+	writeFile(t, filepath.Join(dest, "schedule", "SKILL.md"), "edited by hand", 0o644)
+	writeFile(t, filepath.Join(src, "schedule", "SKILL.md"), "schedule v2", 0o644)
+
+	rep, err := Install(src, dest, st)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"schedule"}, rep.Kept)
+	assert.Empty(t, rep.Updated)
+	assert.Equal(t, "edited by hand", readSchedule(t, dest))
+}
+
+func TestInstall_AdoptsIdenticalSkillAndUpdatesItLater(t *testing.T) {
+	src, dest, st := bundled(t), t.TempDir(), stateFile(t)
+	writeFile(t, filepath.Join(dest, "schedule", "SKILL.md"), "bundled schedule", 0o644)
+
+	rep, err := Install(src, dest, st)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"send-file"}, rep.Installed)
+	assert.Empty(t, rep.Kept)
+
+	writeFile(t, filepath.Join(src, "schedule", "SKILL.md"), "schedule v2", 0o644)
+	rep, err = Install(src, dest, st)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"schedule"}, rep.Updated)
+	assert.Equal(t, "schedule v2", readSchedule(t, dest))
+}
+
+func TestInstall_NeverReplacesLinkedSkill(t *testing.T) {
+	src, dest, st := bundled(t), t.TempDir(), stateFile(t)
+	shared := filepath.Join(t.TempDir(), "schedule")
+	writeFile(t, filepath.Join(shared, "SKILL.md"), "bundled schedule", 0o644)
+	require.NoError(t, os.Symlink(shared, filepath.Join(dest, "schedule")))
+	writeFile(t, filepath.Join(src, "schedule", "SKILL.md"), "schedule v2", 0o644)
+
+	rep, err := Install(src, dest, st)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"schedule"}, rep.Kept)
+	info, err := os.Lstat(filepath.Join(dest, "schedule"))
+	require.NoError(t, err)
+	assert.NotZero(t, info.Mode()&os.ModeSymlink)
+}
+
+func TestInstall_TracksEachDestinationSeparately(t *testing.T) {
+	src, st := bundled(t), stateFile(t)
+	first, second := t.TempDir(), t.TempDir()
+	_, err := Install(src, first, st)
+	require.NoError(t, err)
+	writeFile(t, filepath.Join(second, "schedule", "SKILL.md"), "someone else's", 0o644)
+
+	rep, err := Install(src, second, st)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"schedule"}, rep.Kept)
+	assert.Equal(t, "someone else's", readSchedule(t, second))
+}
+
+func TestInstall_UnreadableStateStartsOver(t *testing.T) {
+	src, dest, st := bundled(t), t.TempDir(), stateFile(t)
+	writeFile(t, st, "{not json", 0o644)
+
+	rep, err := Install(src, dest, st)
+
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"schedule", "send-file"}, rep.Installed)
+	data, err := os.ReadFile(st)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "send-file")
 }
 
 func TestDirs(t *testing.T) {

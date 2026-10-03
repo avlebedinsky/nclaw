@@ -268,14 +268,25 @@ func installBundledSkills() {
 		return
 	}
 
+	state := filepath.Join(config.DataDir(), ".nclaw-skills.json")
 	for _, dest := range skills.Dirs(config.CLI(), claudeDir, home) {
-		installed, err := skills.Install(config.BundledSkillsDir(), dest)
+		rep, err := skills.Install(config.BundledSkillsDir(), dest, state)
 		if err != nil {
 			log.Printf("skills: %v", err)
 		}
-		if len(installed) > 0 {
-			log.Printf("skills: installed %v into %s", installed, dest)
-		}
+		logSkillReport(dest, &rep)
+	}
+}
+
+func logSkillReport(dest string, rep *skills.Report) {
+	if len(rep.Installed) > 0 {
+		log.Printf("skills: installed %v into %s", rep.Installed, dest)
+	}
+	if len(rep.Updated) > 0 {
+		log.Printf("skills: updated %v in %s to the bundled version", rep.Updated, dest)
+	}
+	if len(rep.Kept) > 0 {
+		log.Printf("skills: kept %v in %s as is: they differ from the bundled version and from what nclaw installed", rep.Kept, dest)
 	}
 }
 

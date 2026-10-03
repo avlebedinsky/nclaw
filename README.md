@@ -612,7 +612,7 @@ NClaw variables use the `NCLAW_` prefix. Provider API keys use the provider's na
 | `NCLAW_WHISPER_MODEL` | No | set in the images | Path to a whisper.cpp ggml model; empty disables voice transcription |
 | `NCLAW_WHISPER_LANGUAGE` | No | `auto` | Spoken-language hint for transcription (e.g. `ru`, `en`) |
 | `NCLAW_WHISPER_BIN` | No | `whisper-cli` | whisper.cpp CLI binary |
-| `NCLAW_BUNDLED_SKILLS_DIR` | No | `/opt/nclaw-skills` | Directory with skills shipped in the image; missing ones are installed into the agent's skills directory at startup |
+| `NCLAW_BUNDLED_SKILLS_DIR` | No | `/opt/nclaw-skills` | Directory with skills shipped in the image; missing ones are installed into the agent's skills directory at startup, and copies you have not edited follow image updates |
 | `NCLAW_MODEL` | No | — | Model for multi-model backend (e.g. `g@gemini-2.5-pro`). Setting this auto-selects multi-model |
 | `NCLAW_COPILOT_MODEL` | No | — | Model for Copilot backend (e.g. `gpt-4.1`). Only used when `NCLAW_CLI=copilot` |
 | `NCLAW_TELEGRAM_WHITELIST_CHAT_IDS` | No | — | Comma-separated list of allowed Telegram chat IDs. If unset, accepts all chats (with a security warning) |
@@ -712,7 +712,7 @@ Six skills ship with nclaw:
 | `skill-creator` | [anthropics/skills](https://github.com/anthropics/skills) | Guide for creating new custom skills |
 | `agent-browser` | [vercel-labs/agent-browser](https://github.com/vercel-labs/agent-browser) | Browse the web using system Chromium |
 
-Bundled skills live in `/opt/nclaw-skills` inside the images. On startup nclaw copies every bundled skill that is missing into the agent's skills directory (`/root/.claude/skills`, plus `~/.codex/skills` or `~/.gemini/skills` for those backends). Existing skills — including ones you edited — are never overwritten; delete a skill's directory to get the bundled version back.
+Bundled skills live in `/opt/nclaw-skills` inside the images. On startup nclaw copies every bundled skill that is missing into the agent's skills directory (`/root/.claude/skills`, plus `~/.codex/skills` or `~/.gemini/skills` for those backends), and remembers a hash of each copy in `{data_dir}/.nclaw-skills.json`. When a newer image ships a changed skill, a copy that still matches what nclaw installed is replaced with the new version. Skills you edited, skills that differ from anything nclaw installed, and symlinked skills are never overwritten; the startup log lists them. Delete a skill's directory to get the bundled version back.
 
 The assistant can also create its own skills on the fly when a task requires specialized or repeatable behavior that isn't covered by the built-in set. It can even [learn to produce music](https://nclaw.io/music/).
 

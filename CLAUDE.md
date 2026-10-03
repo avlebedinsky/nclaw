@@ -61,7 +61,7 @@ Three input channels (handler, scheduler, webhook) put their work into a per-cha
 - `internal/draft/` - Live Telegram draft of the answer being written, for private chats
 - `internal/authwatch/` - Warns the admin chat before the backend's stored sign-in expires
 - `internal/transcribe/` - Voice/video-note transcription with ffmpeg + whisper.cpp
-- `internal/skills/` - Installs bundled skills that are missing into the CLI skills dirs at startup
+- `internal/skills/` - Installs missing bundled skills into the CLI skills dirs at startup and updates the copies it made unless they were edited since (hashes in `{data_dir}/.nclaw-skills.json`)
 - `internal/blocks/` - Command block patterns (`nclaw:schedule`, `nclaw:webhook`, `nclaw:sendfile`) shared by all packages
 - `internal/pipeline/` - Unified post-processing: block execution, stripping, sendfile, reply delivery
 - `internal/sendfile/` - Shared sendfile processing: parses `nclaw:sendfile` blocks, validates paths, sends documents
@@ -143,7 +143,7 @@ Optional:
 - `NCLAW_WHISPER_MODEL` - whisper.cpp ggml model path; empty disables voice transcription (set in the Docker images)
 - `NCLAW_WHISPER_LANGUAGE` - Spoken-language hint for transcription (default: `auto`)
 - `NCLAW_WHISPER_BIN` - whisper.cpp CLI (default: `whisper-cli`)
-- `NCLAW_BUNDLED_SKILLS_DIR` - Skills shipped with the image, installed when missing (default: `/opt/nclaw-skills`)
+- `NCLAW_BUNDLED_SKILLS_DIR` - Skills shipped with the image, installed when missing and updated while unedited (default: `/opt/nclaw-skills`)
 - `NCLAW_WEBHOOK_BASE_DOMAIN` - Base domain for webhook URLs (required when webhooks enabled)
 - `NCLAW_WEBHOOK_PORT` - Webhook HTTP server listen address (default: `:3000`)
 
