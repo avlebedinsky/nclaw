@@ -3,6 +3,7 @@ services:
     image: ghcr.io/avlebedinsky/nclaw:${NCLAW_IMAGE_TAG:-claude}
     container_name: nclaw
     restart: unless-stopped
+    stop_grace_period: 30s
     env_file: .env
     environment:
       NCLAW_DATA_DIR: /app/data
@@ -12,10 +13,8 @@ services:
       # NCLAW_WEBHOOK_PORT: :3000
     volumes:
       - ./data:/app/data
-      - ${CLAUDE_CREDENTIALS_PATH}:/root/.claude/.credentials.json
-      - ${CLAUDE_SKILLS_PATH:-./claude-skills}:/root/.claude/skills
+      - ${CLAUDE_HOME_PATH:-./claude}:/root/.claude
       - ${AGENTS_PATH:-./agents}:/root/.agents
-      - ${CLAUDE_CONFIG_PATH:-./claude-config}:/root/.claude/backups
       - ${COPILOT_CONFIG_PATH:-./copilot}:/root/.copilot
     # ports:
     #   - "3000:3000"  # Uncomment if using webhooks

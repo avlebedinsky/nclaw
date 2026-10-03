@@ -36,24 +36,31 @@ After every `git push`, watch the triggered GitHub Actions run to completion and
 
 ```
 Telegram ----------->\
-Scheduler ------------>  CLI Backend (cli.Provider) -> Pipeline.Process() -> Telegram
+Scheduler ------------>  chatqueue (per chat) -> Invoker.Run() -> CLI Backend (cli.Provider) -> Pipeline.Process() -> Telegram
 Webhook  ----------->/
 ```
 
-Three input channels (handler, scheduler, webhook) each invoke the configured CLI backend via the `cli.Provider` interface. All post-processing (command block execution, stripping, sendfile, reply delivery) is handled by a shared `Pipeline.Process()` call, ensuring consistent behavior across all channels and backends.
+Three input channels (handler, scheduler, webhook) put their work into a per-chat FIFO queue (`internal/chatqueue`), so runs in one chat never overlap and keep arrival order. Each run goes through the shared `invoker.Invoker`, which builds the same system prompt for every channel and invokes the configured CLI backend via the `cli.Provider` interface. All post-processing (command block execution, stripping, sendfile, reply delivery) is handled by a shared `Pipeline.Process()` call, ensuring consistent behavior across all channels and backends.
 
 ## Project Structure
 
 - `cmd/nclaw/main.go` - Entrypoint: config init, DB setup, bot creation, scheduler start, CLI backend selection
 - `internal/config/` - Viper-based config (env prefix `NCLAW_`, `.env` support, optional `config.yaml`)
 - `internal/cli/` - Generic CLI interfaces (`Client`, `Provider`, `Result`) that all backends implement
-- `internal/cli/streamjson/` - Shared stream-json output parser (used by Claude and Claudish adapters)
-- `internal/claude/` - Claude Code CLI adapter (fluent builder, stream-json parsing, OAuth token refresh)
+- `internal/cli/procrun/` - Runs CLI binaries in their own process group; canceling the context stops the whole tree
+- `internal/cli/streamjson/` - Shared stream-json output parser (used by Claude and Claudish adapters), including tool-call events
+- `internal/cli/claude/` - Claude Code CLI adapter (fluent builder, stream-json parsing, OAuth token refresh, session storage under `CLAUDE_CONFIG_DIR`)
 - `internal/cli/claudish/` - Multi-model CLI adapter (via OpenRouter, Gemini, OpenAI, Ollama, etc.)
-- `internal/codex/` - OpenAI Codex CLI adapter (JSONL event parsing, AGENTS.md system prompt)
-- `internal/copilot/` - GitHub Copilot CLI adapter (plain text output, `.github/copilot-instructions.md` system prompt)
+- `internal/cli/codex/` - OpenAI Codex CLI adapter (JSONL event parsing, AGENTS.md system prompt)
+- `internal/cli/copilot/` - GitHub Copilot CLI adapter (JSONL output, `.github/copilot-instructions.md` system prompt)
 - `internal/cli/gemini/` - Gemini CLI adapter (NDJSON stream-json parsing, `GEMINI.md` system prompt)
-- `internal/handler/` - Telegram message handling, file attachments, reply context
+- `internal/chatqueue/` - Per-chat FIFO queue: batches consecutive user messages, runs scheduler/webhook jobs in line, supports stop/snapshot/close
+- `internal/invoker/` - Single entry point for CLI runs: working dir (`.isolated` for isolated tasks), system prompt, time header, session reset, timeout
+- `internal/handler/` - Telegram message handling, prompt composition (batches, albums, voice transcripts), bot commands (`/stop`, `/new`, `/status`), shutdown notices
+- `internal/progress/` - Status message edited as tool calls stream in
+- `internal/transcribe/` - Voice/video-note transcription with ffmpeg + whisper.cpp
+- `internal/skills/` - Installs bundled skills that are missing into the CLI skills dirs at startup
+- `internal/blocks/` - Command block patterns (`nclaw:schedule`, `nclaw:webhook`, `nclaw:sendfile`) shared by all packages
 - `internal/pipeline/` - Unified post-processing: block execution, stripping, sendfile, reply delivery
 - `internal/sendfile/` - Shared sendfile processing: parses `nclaw:sendfile` blocks, validates paths, sends documents
 - `internal/model/` - GORM models: `ScheduledTask`, `TaskRunLog`, `WebhookRegistration`
@@ -65,17 +72,20 @@ Three input channels (handler, scheduler, webhook) each invoke the configured CL
 ## Key Patterns
 
 ### CLI Backend Interface (`internal/cli/`)
-All CLI backends implement two interfaces: `cli.Client` (per-request builder with `Dir()`, `SkipPermissions()`, `AppendSystemPrompt()`, `Ask()`, `Continue()`) and `cli.Provider` (singleton with `NewClient()`, `PreInvoke()`, `Version()`, `Name()`). The `*cli.Result` struct has `Text` (final message for display) and `FullText` (all messages for command block scanning). Consumers use only these interfaces, making them backend-agnostic.
+All CLI backends implement two interfaces: `cli.Client` (per-request builder with `Context()`, `Dir()`, `SkipPermissions()`, `AppendSystemPrompt()`, `Ask()`, `Continue()`) and `cli.Provider` (singleton with `NewClient()`, `PreInvoke()`, `Version()`, `Name()`). The `*cli.Result` struct has `Text` (final message for display) and `FullText` (all messages for command block scanning). Consumers use only these interfaces, making them backend-agnostic. Optional capabilities are discovered by type assertion instead of backend names: `NativeSkillsProvider`, `SessionStore` (session size/archive), `StreamingClient` (`OnMessage`), `ProgressClient` (`OnToolUse`), `EphemeralClient` (no session persistence).
 
 ### CLI Adapters
-- **Claude** (`internal/claude/`): Stream-json output parsing via shared `streamjson` package. Claude-specific methods (`Model`, `FallbackModel`, `Resume`) remain on the concrete `*Claude` type. `PreInvoke()` handles OAuth token refresh.
+- **Claude** (`internal/cli/claude/`): Stream-json output parsing via shared `streamjson` package. Claude-specific methods (`Model`, `FallbackModel`, `Resume`) remain on the concrete `*Claude` type. `PreInvoke()` handles OAuth token refresh.
 - **Claudish** (`internal/cli/claudish/`): Wraps Claude Code via [claudish](https://github.com/MadAppGang/claudish), proxying API calls to alternative providers (OpenRouter, Gemini, OpenAI, Ollama, LM Studio, etc.). Uses the same stream-json output format as Claude, parsed via the shared `streamjson` package. Passes model config (`--model` flag) and model tier overrides (`CLAUDISH_MODEL_OPUS/SONNET/HAIKU/SUBAGENT`) as environment variables. Provider API keys (e.g. `OPENROUTER_API_KEY`, `GEMINI_API_KEY`) pass through from the OS environment. `PreInvoke()` is a no-op.
-- **Codex** (`internal/codex/`): JSONL event parsing (`item.completed` with `type: "agent_message"`). System prompt written to `AGENTS.md` in the working directory.
+- **Codex** (`internal/cli/codex/`): JSONL event parsing (`item.completed` with `type: "agent_message"`). System prompt written to `AGENTS.md` in the working directory.
 - **Copilot** (`internal/cli/copilot/`): JSONL output parsing via `--output-format=json` flag (`assistant.message` events and `result` for session ID). Session ID tracked per-chat via `.copilot-session-id` file for reliable `--resume` across concurrent chats. `--allow-all`, `--no-ask-user`, `--autopilot` in skip-permissions mode. Optional `--model=MODEL` via `NCLAW_COPILOT_MODEL`. System prompt written to `.github/copilot-instructions.md`. `PreInvoke()` is a no-op.
 - **Gemini** (`internal/cli/gemini/`): NDJSON stream-json output parsing (`--output-format stream-json`) with its own event types (message, tool_use, tool_result, error, result). System prompt written to `GEMINI.md` in the working directory. Uses `--approval-mode yolo` for auto-approve. `PreInvoke()` is a no-op.
 
 ### OAuth Token Refresh
-Before each Claude CLI invocation, `claude.EnsureValidToken()` (called via `Provider.PreInvoke()`) proactively refreshes the OAuth token if it expires within 5 minutes. Credentials are read from `~/.claude/.credentials.json` using field-preserving JSON round-tripping. Refresh failures are logged as warnings and do not block the CLI call. Codex and Copilot providers have no-op `PreInvoke()`.
+Before each Claude CLI invocation, `claude.EnsureValidToken()` (called via `Provider.PreInvoke()`) proactively refreshes the OAuth token if it expires within 5 minutes. Credentials are read from `$CLAUDE_CONFIG_DIR/.credentials.json` (default `~/.claude`) using field-preserving JSON round-tripping. The refresh is skipped when `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_AUTH_TOKEN` or `ANTHROPIC_API_KEY` is set. Refresh failures are logged as warnings and do not block the CLI call. Codex and Copilot providers have no-op `PreInvoke()`.
+
+### Chat Queue, Invoker and Commands
+Telegram updates are dispatched synchronously (`bot.WithNotAsyncHandlers`); the whitelist is a bot middleware. `Handler.Default` only enqueues: user messages wait a short settle window (longer for albums) and everything queued while a run is busy is answered in one combined prompt. Scheduler and webhook runs are `chatqueue.Job`s in the same lane. `/stop` cancels the lane's run (`procrun` signals the CLI's process group) and drops the queue, `/new` queues a session reset, `/status` reports the lane state. On SIGTERM the queue is closed, interrupted chats are notified, and running work gets up to 20s. Every CLI run gets the shared system prompt (Telegram formatting, scheduler timezone, task list, skills for non-native backends) plus a current-time header, and is limited by `NCLAW_CLI_TIMEOUT`. Isolated scheduled tasks run in `<chat>/.isolated` so they never become the chat's latest session.
 
 ### Unified Pipeline (`internal/pipeline/`)
 All post-CLI processing goes through `Pipeline.Process()`, which:
@@ -93,11 +103,11 @@ The scheduler and webhook manager implement the `BlockExecutor` interface and ar
 `nclaw:webhook` code blocks contain JSON commands (`create`, `delete`, `list`). Webhooks register HTTP endpoints at `https://{BASE_DOMAIN}/webhooks/{UUID}`. When an external service calls a webhook URL, the request (method, headers, query params, body) is forwarded to the CLI backend in the originating chat via `Continue()`. The HTTP server returns 200 immediately; CLI processing happens asynchronously in a goroutine. Webhooks persist in SQLite alongside scheduled tasks. The webhook manager implements `BlockExecutor` for the pipeline.
 
 ### File Handling
-- **Inbound**: Attachments (documents, photos, audio, video, stickers) are downloaded to the chat directory and referenced in prompts. Files are cached by unique ID and size.
-- **Outbound**: `sendfile.ExecuteBlocks()` scans for `nclaw:sendfile` code blocks and sends matched files as Telegram documents. File paths must resolve to within the chat directory or the OS temp directory; paths outside these locations are rejected.
+- **Inbound**: Attachments (documents, photos, audio, video, stickers) are downloaded to the chat directory as `<name>_<file_unique_id><ext>` and referenced in prompts. Files are cached by unique ID and size. Voice messages and video notes are transcribed with whisper.cpp when `NCLAW_WHISPER_MODEL` is set and passed as text.
+- **Outbound**: `sendfile.ExecuteBlocks()` scans for `nclaw:sendfile` code blocks and sends matched files as Telegram documents. Relative paths resolve against the run's working directory; files must resolve to within the chat directory or the OS temp directory; paths outside these locations are rejected.
 
 ### Message Formatting
-Replies use Telegram HTML formatting with plain-text fallback. Long messages are split at newline boundaries (max 4096 chars per message).
+Replies use Telegram HTML formatting with plain-text fallback (tags stripped, entities decoded). Long messages are split by visible UTF-16 length (max 4096), preferring newline boundaries; open tags are closed at each cut and reopened in the next chunk.
 
 ## Configuration
 
@@ -120,6 +130,12 @@ Optional:
 - `NCLAW_DB_PATH` - SQLite path (default: `{data_dir}/nclaw.db`)
 - `NCLAW_MAX_SESSION_BYTES` - Claude Code session transcript size (bytes) past which the session is archived and restarted fresh on the next message (default: `0`, disabled). Only applies to `claude`/`claudish` backends
 - `NCLAW_TIMEZONE` - Timezone for scheduler (default: system local)
+- `NCLAW_CLI_TIMEOUT` - Maximum duration of one CLI run (default: `60m`; bare numbers are seconds; `0` disables)
+- `NCLAW_PROGRESS` - Show a status message with the agent's current step while a request runs (default: `true`)
+- `NCLAW_WHISPER_MODEL` - whisper.cpp ggml model path; empty disables voice transcription (set in the Docker images)
+- `NCLAW_WHISPER_LANGUAGE` - Spoken-language hint for transcription (default: `auto`)
+- `NCLAW_WHISPER_BIN` - whisper.cpp CLI (default: `whisper-cli`)
+- `NCLAW_BUNDLED_SKILLS_DIR` - Skills shipped with the image, installed when missing (default: `/opt/nclaw-skills`)
 - `NCLAW_WEBHOOK_BASE_DOMAIN` - Base domain for webhook URLs (required when webhooks enabled)
 - `NCLAW_WEBHOOK_PORT` - Webhook HTTP server listen address (default: `:3000`)
 
@@ -162,7 +178,6 @@ make docker-gemini   # Build Gemini-only image
 
 - Go 1.25
 - `github.com/go-telegram/bot` - Telegram bot framework
-- `internal/cli/procrun` - Runs CLI backends; canceling a run stops the whole process group
 - `github.com/spf13/viper` + `github.com/joho/godotenv` - Configuration
 - `gorm.io/gorm` + `gorm.io/driver/sqlite` - Database
 - `github.com/go-co-op/gocron/v2` - Task scheduling
@@ -186,13 +201,13 @@ The nuspec is generated inline in the CI workflow. It must include: `title` (dis
 
 ## Docker
 
-A single `docker/Dockerfile` uses multi-stage targets to produce 6 image variants. A shared `base` stage contains all common tools (git, gh CLI, Chromium, Go, Python/uv, skills); each variant adds only its CLI backend:
+A single `docker/Dockerfile` uses multi-stage targets to produce 6 image variants. A shared `base` stage contains all common tools (git, gh CLI, Chromium, Go, Python/uv, ffmpeg, whisper.cpp built in `whisper-builder` with the model from `whisper-model`, bundled skills in `/opt/nclaw-skills`), sets `CLAUDE_CONFIG_DIR=/root/.claude` and runs nclaw under `tini`; each variant adds only its CLI backend:
 
-- `--target all` — All-in-one: Claude Code + Claudish + Codex + Copilot + Gemini (tagged `latest`)
+- `--target all` — All-in-one: Claude Code + Claudish + Codex + Gemini (tagged `latest`)
 - `--target claude` — Claude Code only (tagged `claude`)
 - `--target multi-model` — Claude Code + Multi-Model (tagged `multi-model`)
 - `--target codex` — OpenAI Codex only (tagged `codex`)
 - `--target copilot` — GitHub Copilot only (tagged `copilot`)
 - `--target gemini` — Gemini CLI only (tagged `gemini`)
 
-CI builds and pushes all six variants to GHCR using a matrix strategy. Custom nclaw skills (`schedule`, `send-file`, `webhook`) and third-party skills are included in all variants.
+The `copilot` variant is Debian-based (`node:24-slim`) because the Copilot CLI needs glibc; it has no Chromium or whisper. CI builds and pushes all six variants to GHCR using a matrix strategy. Custom nclaw skills (`schedule`, `send-file`, `webhook`) are included in all variants; the third-party skills in the Alpine variants.
