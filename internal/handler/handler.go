@@ -2,10 +2,12 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/go-telegram/bot"
@@ -76,11 +78,20 @@ func (h *Handler) processMessage(ctx context.Context, b *bot.Bot, msg *models.Me
 }
 
 func withErrorText(result *cli.Result, err error) *cli.Result {
-	if err == nil || result.Text != "" {
+	var timeout *invoker.TimeoutError
+	switch {
+	case err == nil:
 		return result
+	case errors.As(err, &timeout):
+		notice := fmt.Sprintf("⏱ Stopped: the run took longer than %s.", timeout.After)
+		text := strings.TrimSpace(result.Text + "\n\n" + notice)
+		return &cli.Result{Text: text, FullText: result.FullText}
+	case result.Text != "":
+		return result
+	default:
+		text := "error: " + err.Error()
+		return &cli.Result{Text: text, FullText: text}
 	}
-	text := "error: " + err.Error()
-	return &cli.Result{Text: text, FullText: text}
 }
 
 // resolveContent extracts text and attachment from a message, falling back to reply attachment.

@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -559,6 +560,7 @@ type mockClient struct {
 }
 
 func (m *mockClient) Dir(dir string) cli.Client              { m.dir = dir; return m }
+func (m *mockClient) Context(context.Context) cli.Client     { return m }
 func (m *mockClient) SkipPermissions() cli.Client            { m.skipPerms = true; return m }
 func (m *mockClient) AppendSystemPrompt(p string) cli.Client { m.systemPrompt = p; return m }
 func (m *mockClient) Ask(query string) (*cli.Result, error) {
@@ -921,4 +923,14 @@ func TestFetchToFile_ErrorOmitsURL(t *testing.T) {
 
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "SECRET")
+}
+
+func TestWithErrorText(t *testing.T) {
+	timeout := fmt.Errorf("claude: %w", &invoker.TimeoutError{After: time.Hour})
+
+	assert.Equal(t, "ok", withErrorText(&cli.Result{Text: "ok"}, nil).Text)
+	assert.Equal(t, "partial", withErrorText(&cli.Result{Text: "partial"}, errors.New("x")).Text)
+	assert.Equal(t, "error: boom", withErrorText(&cli.Result{}, errors.New("boom")).Text)
+	assert.Equal(t, "⏱ Stopped: the run took longer than 1h0m0s.", withErrorText(&cli.Result{}, timeout).Text)
+	assert.Equal(t, "half done\n\n⏱ Stopped: the run took longer than 1h0m0s.", withErrorText(&cli.Result{Text: "half done"}, timeout).Text)
 }

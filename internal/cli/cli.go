@@ -1,5 +1,10 @@
 package cli
 
+import (
+	"context"
+	"time"
+)
+
 // Result holds the output from a CLI invocation.
 type Result struct {
 	// Text is the final assistant message (suitable for display).
@@ -15,8 +20,12 @@ type Result struct {
 	Messages []string
 }
 
+// VersionTimeout bounds a CLI version probe.
+const VersionTimeout = 30 * time.Second
+
 // Client is a per-request builder for invoking a CLI backend.
 type Client interface {
+	Context(ctx context.Context) Client
 	Dir(dir string) Client
 	SkipPermissions() Client
 	AppendSystemPrompt(prompt string) Client

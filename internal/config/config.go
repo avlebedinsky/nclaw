@@ -178,6 +178,26 @@ func CopilotModel() string {
 	return viper.GetString("copilot_model")
 }
 
+const defaultCLITimeout = 60 * time.Minute
+
+// CLITimeout returns the maximum duration of one CLI run (env: NCLAW_CLI_TIMEOUT).
+// A bare number is read as seconds, 0 disables the limit, and the default is 60 minutes.
+func CLITimeout() time.Duration {
+	raw := strings.TrimSpace(viper.GetString("cli_timeout"))
+	if raw == "" {
+		return defaultCLITimeout
+	}
+	if n, err := strconv.Atoi(raw); err == nil && n >= 0 {
+		return time.Duration(n) * time.Second
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d < 0 {
+		log.Printf("config: invalid cli_timeout %q, using %s", raw, defaultCLITimeout)
+		return defaultCLITimeout
+	}
+	return d
+}
+
 // Location returns the configured timezone, falling back to the system local zone when it is invalid.
 func Location() *time.Location {
 	loc, err := time.LoadLocation(Timezone())

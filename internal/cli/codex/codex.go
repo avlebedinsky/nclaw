@@ -1,13 +1,14 @@
 package codex
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/nickalie/go-binwrapper"
 	"github.com/nickalie/nclaw/internal/cli"
+	"github.com/nickalie/nclaw/internal/cli/procrun"
 )
 
 // Compile-time check: *Codex implements cli.Client.
@@ -15,7 +16,8 @@ var _ cli.Client = (*Codex)(nil)
 
 // Codex wraps the OpenAI Codex CLI binary.
 type Codex struct {
-	bin             *binwrapper.BinWrapper
+	bin             *procrun.Cmd
+	ctx             context.Context
 	dir             string
 	systemPrompt    string
 	skipPermissions bool
@@ -23,7 +25,7 @@ type Codex struct {
 
 // New creates a new Codex CLI wrapper.
 func New() *Codex {
-	bin := binwrapper.NewBinWrapper().
+	bin := procrun.New().
 		ExecPath("codex").
 		AutoExe()
 
@@ -40,6 +42,19 @@ func (c *Codex) Dir(dir string) cli.Client {
 func (c *Codex) SkipPermissions() cli.Client {
 	c.skipPermissions = true
 	return c
+}
+
+// Context sets the context that cancels the run.
+func (c *Codex) Context(ctx context.Context) cli.Client {
+	c.ctx = ctx
+	return c
+}
+
+func (c *Codex) runCtx() context.Context {
+	if c.ctx == nil {
+		return context.Background()
+	}
+	return c.ctx
 }
 
 // AppendSystemPrompt sets a system prompt to be written to AGENTS.md
@@ -71,7 +86,7 @@ func (c *Codex) Continue(query string) (*cli.Result, error) {
 
 // runAndParse executes the CLI and parses JSONL output into a Result.
 func (c *Codex) runAndParse(query string) (*cli.Result, error) {
-	if err := c.bin.Run(query); err != nil {
+	if err := c.bin.Run(c.runCtx(), query); err != nil {
 		result := parseJSONLOutput(c.bin.StdOut())
 		if result.Text == "" && result.FullText == "" {
 			text := strings.TrimSpace(string(c.bin.CombinedOutput()))
@@ -87,7 +102,10 @@ func (c *Codex) runAndParse(query string) (*cli.Result, error) {
 func (c *Codex) Version() (string, error) {
 	c.bin.Reset()
 
-	if err := c.bin.Run("--version"); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), cli.VersionTimeout)
+	defer cancel()
+
+	if err := c.bin.Run(ctx, "--version"); err != nil {
 		return strings.TrimSpace(string(c.bin.CombinedOutput())), fmt.Errorf("codex: %w", err)
 	}
 
@@ -104,7 +122,7 @@ func (c *Codex) writeSystemPrompt() error {
 	return os.WriteFile(path, []byte(c.systemPrompt), 0o644)
 }
 
-// prepare resets the binwrapper and rebuilds all arguments.
+// prepare resets the command and rebuilds all arguments.
 func (c *Codex) prepare(extra ...string) {
 	c.bin.Reset()
 

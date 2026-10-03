@@ -1,14 +1,15 @@
 package copilot
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/nickalie/go-binwrapper"
 	"github.com/nickalie/nclaw/internal/cli"
+	"github.com/nickalie/nclaw/internal/cli/procrun"
 )
 
 // Compile-time check: *Copilot implements cli.Client.
@@ -19,7 +20,8 @@ const sessionIDFile = ".copilot-session-id"
 
 // Copilot wraps the GitHub Copilot CLI binary.
 type Copilot struct {
-	bin             *binwrapper.BinWrapper
+	bin             *procrun.Cmd
+	ctx             context.Context
 	dir             string
 	model           string
 	systemPrompt    string
@@ -28,7 +30,7 @@ type Copilot struct {
 
 // New creates a new Copilot CLI wrapper.
 func New() *Copilot {
-	bin := binwrapper.NewBinWrapper().
+	bin := procrun.New().
 		ExecPath("copilot").
 		AutoExe()
 
@@ -45,6 +47,19 @@ func (c *Copilot) Dir(dir string) cli.Client {
 func (c *Copilot) SkipPermissions() cli.Client {
 	c.skipPermissions = true
 	return c
+}
+
+// Context sets the context that cancels the run.
+func (c *Copilot) Context(ctx context.Context) cli.Client {
+	c.ctx = ctx
+	return c
+}
+
+func (c *Copilot) runCtx() context.Context {
+	if c.ctx == nil {
+		return context.Background()
+	}
+	return c.ctx
 }
 
 // AppendSystemPrompt sets a system prompt to be written to
@@ -79,7 +94,7 @@ func (c *Copilot) Continue(query string) (*cli.Result, error) {
 // runAndParse executes the CLI and parses JSONL output into a Result.
 // The session ID from the result event is persisted for future Continue() calls.
 func (c *Copilot) runAndParse(query string) (*cli.Result, error) {
-	if err := c.bin.Run(query); err != nil {
+	if err := c.bin.Run(c.runCtx(), query); err != nil {
 		parsed := parseJSONOutput(c.bin.StdOut())
 		if parsed.result.Text == "" && parsed.result.FullText == "" {
 			text := strings.TrimSpace(string(c.bin.CombinedOutput()))
@@ -101,7 +116,10 @@ func (c *Copilot) runAndParse(query string) (*cli.Result, error) {
 func (c *Copilot) Version() (string, error) {
 	c.bin.Reset()
 
-	if err := c.bin.Run("version"); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), cli.VersionTimeout)
+	defer cancel()
+
+	if err := c.bin.Run(ctx, "version"); err != nil {
 		return strings.TrimSpace(string(c.bin.CombinedOutput())), fmt.Errorf("copilot: %w", err)
 	}
 
@@ -124,13 +142,13 @@ func (c *Copilot) writeSystemPrompt() error {
 	return os.WriteFile(path, []byte(c.systemPrompt), 0o644)
 }
 
-// prepare resets the binwrapper and rebuilds arguments for an Ask call.
+// prepare resets the command and rebuilds arguments for an Ask call.
 func (c *Copilot) prepare() {
 	c.bin.Reset()
 	c.addCommonArgs()
 }
 
-// prepareContinue resets the binwrapper and rebuilds arguments for a Continue call.
+// prepareContinue resets the command and rebuilds arguments for a Continue call.
 // Uses --resume=SESSION-ID when a session ID is available, --continue otherwise.
 func (c *Copilot) prepareContinue() {
 	c.bin.Reset()

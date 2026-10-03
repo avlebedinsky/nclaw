@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -8,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nickalie/go-binwrapper"
 	"github.com/nickalie/nclaw/internal/cli"
+	"github.com/nickalie/nclaw/internal/cli/procrun"
 	"github.com/nickalie/nclaw/internal/cli/streamjson"
 )
 
@@ -28,7 +29,8 @@ const formatStreamJSON outputFormat = "stream-json"
 
 // Claude wraps the Claude Code CLI binary.
 type Claude struct {
-	bin             *binwrapper.BinWrapper
+	bin             *procrun.Cmd
+	ctx             context.Context
 	model           string
 	fallbackModel   string
 	outputFormat    outputFormat
@@ -54,7 +56,7 @@ type Claude struct {
 
 // New creates a new Claude CLI wrapper.
 func New() *Claude {
-	bin := binwrapper.NewBinWrapper().
+	bin := procrun.New().
 		ExecPath("claude").
 		AutoExe()
 
@@ -168,6 +170,19 @@ func (c *Claude) SkipPermissions() cli.Client {
 	return c
 }
 
+// Context sets the context that cancels the run.
+func (c *Claude) Context(ctx context.Context) cli.Client {
+	c.ctx = ctx
+	return c
+}
+
+func (c *Claude) runCtx() context.Context {
+	if c.ctx == nil {
+		return context.Background()
+	}
+	return c.ctx
+}
+
 // OnMessage registers a callback invoked for each assistant message as it
 // streams from the CLI, enabling real-time delivery. Implements cli.StreamingClient.
 func (c *Claude) OnMessage(handler cli.MessageHandler) cli.Client {
@@ -258,14 +273,14 @@ func (c *Claude) runAndParse(query string) (*cli.Result, error) {
 // at the end.
 func (c *Claude) run(query string) (*cli.Result, []byte, error) {
 	if c.onMessage == nil {
-		err := c.bin.Run(query)
+		err := c.bin.Run(c.runCtx(), query)
 		stdout := c.bin.StdOut()
 		return streamjson.ParseOutput(stdout), stdout, err
 	}
 
 	w := streamjson.NewStreamWriter(c.onMessage)
 	c.bin.SetStdOut(w)
-	err := c.bin.Run(query)
+	err := c.bin.Run(c.runCtx(), query)
 	return w.Result(), w.Bytes(), err
 }
 
@@ -280,7 +295,10 @@ func combined(stdout, stderr []byte) []byte {
 func (c *Claude) Version() (string, error) {
 	c.bin.Reset()
 
-	if err := c.bin.Run("--version"); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), cli.VersionTimeout)
+	defer cancel()
+
+	if err := c.bin.Run(ctx, "--version"); err != nil {
 		return strings.TrimSpace(string(c.bin.CombinedOutput())), fmt.Errorf("claude: %w", err)
 	}
 
@@ -302,7 +320,7 @@ func (c *Claude) CombinedOutput() []byte {
 	return c.bin.CombinedOutput()
 }
 
-// prepare resets the binwrapper and rebuilds all arguments from stored configuration.
+// prepare resets the command and rebuilds all arguments from stored configuration.
 func (c *Claude) prepare(extra ...string) {
 	c.bin.Reset()
 

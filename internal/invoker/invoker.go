@@ -39,6 +39,16 @@ type Options struct {
 	Location        *time.Location
 	Now             func() time.Time
 	TaskList        TaskListFunc
+	Timeout         time.Duration
+}
+
+// TimeoutError is the cause of a run stopped for exceeding Options.Timeout.
+type TimeoutError struct {
+	After time.Duration
+}
+
+func (e *TimeoutError) Error() string {
+	return fmt.Sprintf("timed out after %s", e.After)
 }
 
 // Request describes one CLI run.
@@ -87,7 +97,7 @@ func (i *Invoker) ChatDir(chatID int64, threadID int) string {
 }
 
 // Run executes one CLI invocation for the request, holding the chat's lock for its duration.
-func (i *Invoker) Run(_ context.Context, req Request) Outcome {
+func (i *Invoker) Run(ctx context.Context, req Request) Outcome {
 	out := i.dirs(req)
 	if err := os.MkdirAll(out.Dir, 0o755); err != nil {
 		out.Result, out.Err = &cli.Result{}, fmt.Errorf("invoker: mkdir %s: %w", out.Dir, err)
@@ -104,7 +114,10 @@ func (i *Invoker) Run(_ context.Context, req Request) Outcome {
 		i.maybeResetSession(out.Dir)
 	}
 
-	client := i.provider.NewClient().Dir(out.Dir).SkipPermissions().
+	runCtx, cancel := i.withTimeout(ctx)
+	defer cancel()
+
+	client := i.provider.NewClient().Context(runCtx).Dir(out.Dir).SkipPermissions().
 		AppendSystemPrompt(i.systemPrompt(req.ChatID, req.ThreadID))
 	if req.Configure != nil {
 		req.Configure(client)
@@ -119,6 +132,13 @@ func (i *Invoker) Run(_ context.Context, req Request) Outcome {
 		log.Printf("invoker: %s error in dir=%s: %v", i.provider.Name(), out.Dir, out.Err)
 	}
 	return out
+}
+
+func (i *Invoker) withTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	if i.opts.Timeout <= 0 {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeoutCause(ctx, i.opts.Timeout, &TimeoutError{After: i.opts.Timeout})
 }
 
 func (i *Invoker) dirs(req Request) Outcome {

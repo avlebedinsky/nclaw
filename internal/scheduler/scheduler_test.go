@@ -577,6 +577,7 @@ func TestPauseThenResume(t *testing.T) {
 type mockCLIClient struct{}
 
 func (m *mockCLIClient) Dir(_ string) cli.Client                { return m }
+func (m *mockCLIClient) Context(context.Context) cli.Client     { return m }
 func (m *mockCLIClient) SkipPermissions() cli.Client            { return m }
 func (m *mockCLIClient) AppendSystemPrompt(_ string) cli.Client { return m }
 
@@ -912,7 +913,8 @@ func (c *recordingClient) Dir(dir string) cli.Client {
 	c.dir = dir
 	return c
 }
-func (c *recordingClient) SkipPermissions() cli.Client { return c }
+func (c *recordingClient) Context(context.Context) cli.Client { return c }
+func (c *recordingClient) SkipPermissions() cli.Client        { return c }
 func (c *recordingClient) AppendSystemPrompt(p string) cli.Client {
 	c.mu.Lock()
 	defer c.mu.Unlock()

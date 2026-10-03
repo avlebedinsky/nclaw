@@ -283,6 +283,7 @@ type streamClient struct {
 }
 
 func (c *streamClient) Dir(string) cli.Client                { return c }
+func (c *streamClient) Context(context.Context) cli.Client   { return c }
 func (c *streamClient) SkipPermissions() cli.Client          { return c }
 func (c *streamClient) AppendSystemPrompt(string) cli.Client { return c }
 func (c *streamClient) Ask(string) (*cli.Result, error)      { return &cli.Result{}, nil }
@@ -296,6 +297,7 @@ func (c *streamClient) OnMessage(h cli.MessageHandler) cli.Client {
 type plainClient struct{}
 
 func (c *plainClient) Dir(string) cli.Client                { return c }
+func (c *plainClient) Context(context.Context) cli.Client   { return c }
 func (c *plainClient) SkipPermissions() cli.Client          { return c }
 func (c *plainClient) AppendSystemPrompt(string) cli.Client { return c }
 func (c *plainClient) Ask(string) (*cli.Result, error)      { return &cli.Result{}, nil }

@@ -1,6 +1,8 @@
 package claude
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -533,4 +535,27 @@ func TestEphemeral_AddsNoSessionPersistence(t *testing.T) {
 	assert.Same(t, c, c.Ephemeral())
 	c.prepare("-p")
 	assert.Contains(t, c.bin.Args(), "--no-session-persistence")
+}
+
+func TestContext_CancelStopsRunningProcess(t *testing.T) {
+	script := filepath.Join(t.TempDir(), "claude")
+	require.NoError(t, os.WriteFile(script, []byte("#!/bin/sh\nsleep 30\n"), 0o755))
+	c := New().ExecPath(script)
+	ctx, cancel := context.WithCancelCause(context.Background())
+	stop := errors.New("stopped by user")
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.Context(ctx).Ask("hello")
+		done <- err
+	}()
+	time.Sleep(100 * time.Millisecond)
+	cancel(stop)
+
+	select {
+	case err := <-done:
+		assert.ErrorIs(t, err, stop)
+	case <-time.After(5 * time.Second):
+		t.Fatal("claude process was not stopped")
+	}
 }

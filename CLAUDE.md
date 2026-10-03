@@ -162,7 +162,7 @@ make docker-gemini   # Build Gemini-only image
 
 - Go 1.25
 - `github.com/go-telegram/bot` - Telegram bot framework
-- `github.com/nickalie/go-binwrapper` - Binary wrapper for CLI backends (Claude, Codex, Copilot, Gemini)
+- `internal/cli/procrun` - Runs CLI backends; canceling a run stops the whole process group
 - `github.com/spf13/viper` + `github.com/joho/godotenv` - Configuration
 - `gorm.io/gorm` + `gorm.io/driver/sqlite` - Database
 - `github.com/go-co-op/gocron/v2` - Task scheduling

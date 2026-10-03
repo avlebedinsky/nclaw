@@ -293,3 +293,24 @@ func TestLocation_InvalidFallsBackToLocal(t *testing.T) {
 
 	assert.Equal(t, time.Local, Location())
 }
+
+func TestCLITimeout(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want time.Duration
+	}{
+		{"", 60 * time.Minute},
+		{"90", 90 * time.Second},
+		{"10m", 10 * time.Minute},
+		{"0", 0},
+		{"soon", 60 * time.Minute},
+		{"-5m", 60 * time.Minute},
+	}
+	for _, tc := range cases {
+		t.Run(tc.raw, func(t *testing.T) {
+			viper.Set("cli_timeout", tc.raw)
+			defer viper.Reset()
+			assert.Equal(t, tc.want, CLITimeout())
+		})
+	}
+}

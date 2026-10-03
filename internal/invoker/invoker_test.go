@@ -3,6 +3,7 @@ package invoker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,7 +27,8 @@ type fakeClient struct {
 	err          error
 }
 
-func (c *fakeClient) Dir(dir string) cli.Client { c.dir = dir; return c }
+func (c *fakeClient) Dir(dir string) cli.Client          { c.dir = dir; return c }
+func (c *fakeClient) Context(context.Context) cli.Client { return c }
 func (c *fakeClient) SkipPermissions() cli.Client {
 	c.skipPerms = true
 	return c
@@ -213,7 +215,8 @@ type ephemeralClient struct {
 	ephemeral bool
 }
 
-func (c *ephemeralClient) Dir(dir string) cli.Client { c.fakeClient.Dir(dir); return c }
+func (c *ephemeralClient) Context(context.Context) cli.Client { return c }
+func (c *ephemeralClient) Dir(dir string) cli.Client          { c.fakeClient.Dir(dir); return c }
 func (c *ephemeralClient) SkipPermissions() cli.Client {
 	c.fakeClient.SkipPermissions()
 	return c
@@ -259,4 +262,53 @@ func TestRun_IsolatedWithoutEphemeralSupportStillAsks(t *testing.T) {
 	inv.Run(context.Background(), Request{ChatID: 1, Prompt: "x", Mode: Isolated})
 
 	assert.Equal(t, "ask", client.mode)
+}
+
+type blockingClient struct {
+	fakeClient
+	ctx context.Context
+}
+
+func (c *blockingClient) Context(ctx context.Context) cli.Client { c.ctx = ctx; return c }
+func (c *blockingClient) Dir(string) cli.Client                  { return c }
+func (c *blockingClient) SkipPermissions() cli.Client            { return c }
+func (c *blockingClient) AppendSystemPrompt(string) cli.Client   { return c }
+func (c *blockingClient) Continue(string) (*cli.Result, error) {
+	<-c.ctx.Done()
+	return &cli.Result{Text: "partial"}, fmt.Errorf("claude: %w", context.Cause(c.ctx))
+}
+
+type blockingProvider struct {
+	fakeProvider
+	client *blockingClient
+}
+
+func (p *blockingProvider) NewClient() cli.Client { return p.client }
+
+func TestRun_TimeoutStopsRun(t *testing.T) {
+	inv := newTestInvoker(t, &blockingProvider{client: &blockingClient{}}, Options{Timeout: 50 * time.Millisecond})
+
+	out := inv.Run(context.Background(), Request{ChatID: 1, Prompt: "x"})
+
+	var timeout *TimeoutError
+	require.ErrorAs(t, out.Err, &timeout)
+	assert.Equal(t, 50*time.Millisecond, timeout.After)
+	assert.Equal(t, "partial", out.Result.Text)
+}
+
+func TestRun_ParentCancelStopsRun(t *testing.T) {
+	inv := newTestInvoker(t, &blockingProvider{client: &blockingClient{}}, Options{})
+	ctx, cancel := context.WithCancelCause(context.Background())
+	stop := errors.New("stopped")
+
+	done := make(chan Outcome, 1)
+	go func() { done <- inv.Run(ctx, Request{ChatID: 1, Prompt: "x"}) }()
+	cancel(stop)
+
+	select {
+	case out := <-done:
+		assert.ErrorIs(t, out.Err, stop)
+	case <-time.After(5 * time.Second):
+		t.Fatal("run was not canceled")
+	}
 }

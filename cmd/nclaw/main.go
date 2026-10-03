@@ -126,6 +126,7 @@ func invokerOptions(loc *time.Location, taskList invoker.TaskListFunc) invoker.O
 		MaxSessionBytes: config.MaxSessionBytes(),
 		Location:        loc,
 		TaskList:        taskList,
+		Timeout:         config.CLITimeout(),
 	}
 	if dir, err := claude.ConfigDir(); err == nil {
 		opts.SkillsDir = filepath.Join(dir, "skills")

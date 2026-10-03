@@ -1,12 +1,13 @@
 package claudish
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
 
-	"github.com/nickalie/go-binwrapper"
 	"github.com/nickalie/nclaw/internal/cli"
+	"github.com/nickalie/nclaw/internal/cli/procrun"
 	"github.com/nickalie/nclaw/internal/cli/streamjson"
 )
 
@@ -18,7 +19,8 @@ var (
 
 // Claudish wraps the claudish CLI binary, which proxies Claude Code to alternative model providers.
 type Claudish struct {
-	bin             *binwrapper.BinWrapper
+	bin             *procrun.Cmd
+	ctx             context.Context
 	dir             string
 	systemPrompt    string
 	onMessage       cli.MessageHandler
@@ -32,7 +34,7 @@ type Claudish struct {
 
 // New creates a new Claudish CLI wrapper.
 func New() *Claudish {
-	bin := binwrapper.NewBinWrapper().
+	bin := procrun.New().
 		ExecPath("claudish").
 		AutoExe()
 
@@ -49,6 +51,19 @@ func (c *Claudish) Dir(dir string) cli.Client {
 func (c *Claudish) SkipPermissions() cli.Client {
 	c.skipPermissions = true
 	return c
+}
+
+// Context sets the context that cancels the run.
+func (c *Claudish) Context(ctx context.Context) cli.Client {
+	c.ctx = ctx
+	return c
+}
+
+func (c *Claudish) runCtx() context.Context {
+	if c.ctx == nil {
+		return context.Background()
+	}
+	return c.ctx
 }
 
 // AppendSystemPrompt appends custom text to the default system prompt.
@@ -96,14 +111,14 @@ func (c *Claudish) runAndParse(query string) (*cli.Result, error) {
 // at the end.
 func (c *Claudish) run(query string) (*cli.Result, []byte, error) {
 	if c.onMessage == nil {
-		err := c.bin.Run(query)
+		err := c.bin.Run(c.runCtx(), query)
 		stdout := c.bin.StdOut()
 		return streamjson.ParseOutput(stdout), stdout, err
 	}
 
 	w := streamjson.NewStreamWriter(c.onMessage)
 	c.bin.SetStdOut(w)
-	err := c.bin.Run(query)
+	err := c.bin.Run(c.runCtx(), query)
 	return w.Result(), w.Bytes(), err
 }
 
@@ -126,14 +141,17 @@ func (c *Claudish) sanitizeOutput(output string) string {
 func (c *Claudish) Version() (string, error) {
 	c.bin.Reset()
 
-	if err := c.bin.Run("--version"); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), cli.VersionTimeout)
+	defer cancel()
+
+	if err := c.bin.Run(ctx, "--version"); err != nil {
 		return strings.TrimSpace(string(c.bin.CombinedOutput())), fmt.Errorf("claudish: %w", err)
 	}
 
 	return strings.TrimSpace(string(c.bin.StdOut())), nil
 }
 
-// prepare resets the binwrapper and rebuilds all arguments from stored configuration.
+// prepare resets the command and rebuilds all arguments from stored configuration.
 func (c *Claudish) prepare(extra ...string) {
 	c.bin.Reset()
 

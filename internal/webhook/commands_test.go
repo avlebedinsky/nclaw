@@ -40,8 +40,9 @@ type mockClient struct {
 	query        string
 }
 
-func (m *mockClient) Dir(string) cli.Client       { return m }
-func (m *mockClient) SkipPermissions() cli.Client { return m }
+func (m *mockClient) Dir(string) cli.Client              { return m }
+func (m *mockClient) Context(context.Context) cli.Client { return m }
+func (m *mockClient) SkipPermissions() cli.Client        { return m }
 func (m *mockClient) AppendSystemPrompt(p string) cli.Client {
 	m.mu.Lock()
 	defer m.mu.Unlock()
