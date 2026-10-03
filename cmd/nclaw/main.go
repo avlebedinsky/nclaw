@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/go-telegram/bot"
@@ -66,19 +67,56 @@ func main() {
 		log.Fatalf("%s cli not found: %v", provider.Name(), err)
 	}
 
-	b, sched, webhookMgr, webhookSrv := setupBot(database, provider)
+	a := setupBot(database, provider)
 
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer cancel()
-	defer sched.Shutdown() //nolint:errcheck // shutdown error on exit is not actionable
-	defer shutdownWebhook(webhookSrv, webhookMgr)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	log.Printf("nclaw bot started (%s, %s: %s)", version.String(), provider.Name(), cliVer)
-	sendStartupNotifications(b)
-	b.Start(ctx)
+	sendStartupNotifications(a.bot)
+	a.bot.Start(ctx)
+	stop()
+
+	log.Println("nclaw: shutting down")
+	a.shutdown(shutdownTimeout)
+	log.Println("nclaw: stopped")
 }
 
-func setupBot(database *gorm.DB, provider cli.Provider) (*bot.Bot, *scheduler.Scheduler, *webhook.Manager, *webhook.Server) {
+const shutdownTimeout = 20 * time.Second
+
+type app struct {
+	bot        *bot.Bot
+	handler    *handler.Handler
+	queue      *chatqueue.Queue[handler.Inbound]
+	sched      *scheduler.Scheduler
+	webhookMgr *webhook.Manager
+	webhookSrv *webhook.Server
+}
+
+func (a *app) shutdown(timeout time.Duration) {
+	if a.webhookSrv != nil {
+		if err := a.webhookSrv.Shutdown(); err != nil {
+			log.Printf("webhook shutdown: %v", err)
+		}
+	}
+
+	a.handler.NotifyShutdown(a.queue.Close())
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if err := a.queue.Wait(ctx); err != nil {
+		log.Printf("nclaw: running work did not finish: %v", err)
+	}
+
+	if err := a.sched.Shutdown(); err != nil {
+		log.Printf("scheduler shutdown: %v", err)
+	}
+	if a.webhookMgr != nil {
+		a.webhookMgr.Wait()
+	}
+}
+
+func setupBot(database *gorm.DB, provider cli.Provider) *app {
 	loc := config.Location()
 	inv := invoker.New(provider, invokerOptions(loc, func(chatID int64, threadID int) string {
 		return scheduler.FormatTaskList(database, loc, chatID, threadID)
@@ -128,7 +166,7 @@ func setupBot(database *gorm.DB, provider cli.Provider) (*bot.Bot, *scheduler.Sc
 	// Start webhook HTTP server after pipeline is wired and scheduler is loaded.
 	webhookSrv := startWebhookServer(webhookMgr)
 
-	return b, sched, webhookMgr, webhookSrv
+	return &app{bot: b, handler: h, queue: queue, sched: sched, webhookMgr: webhookMgr, webhookSrv: webhookSrv}
 }
 
 func registerCommands(b *bot.Bot, h *handler.Handler) {
@@ -361,15 +399,4 @@ func startWebhookServer(mgr *webhook.Manager) *webhook.Server {
 	}()
 
 	return srv
-}
-
-func shutdownWebhook(srv *webhook.Server, mgr *webhook.Manager) {
-	if srv != nil {
-		if err := srv.Shutdown(); err != nil {
-			log.Printf("webhook shutdown: %v", err)
-		}
-	}
-	if mgr != nil {
-		mgr.Wait()
-	}
 }

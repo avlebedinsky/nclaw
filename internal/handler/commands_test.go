@@ -181,3 +181,33 @@ func TestHumanBytes(t *testing.T) {
 	assert.Equal(t, "1.5 KB", humanBytes(1536))
 	assert.Equal(t, "2.0 MB", humanBytes(2<<20))
 }
+
+func TestShutdownText(t *testing.T) {
+	assert.Equal(t, "♻️ The bot is restarting and your request was interrupted. Please send it again in a minute — the conversation is kept.",
+		shutdownText(chatqueue.Interrupted{Running: true, Kind: chatqueue.KindUser}))
+	assert.Equal(t, "♻️ The bot is restarting; a scheduled task in progress was interrupted. 2 queued message(s) were not processed.",
+		shutdownText(chatqueue.Interrupted{Running: true, Kind: chatqueue.KindScheduled, DroppedUser: 2}))
+	assert.Equal(t, "♻️ The bot is restarting. 1 queued message(s) were not processed.",
+		shutdownText(chatqueue.Interrupted{DroppedUser: 1}))
+	assert.Empty(t, shutdownText(chatqueue.Interrupted{DroppedJobs: 3}))
+}
+
+func TestShutdown_InterruptsRunAndNotifiesChat(t *testing.T) {
+	client := &blockingClient{started: make(chan struct{})}
+	sent := &safeSent{}
+	h := newTestHandler(t, &blockingProvider{client: client}, sent.send)
+	h.Send = sent.send
+
+	h.Default(context.Background(), nil, commandUpdate("long job"))
+	select {
+	case <-client.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("run did not start")
+	}
+
+	h.NotifyShutdown(h.Queue.Close())
+	waitQueue(t, h)
+
+	require.Len(t, sent.all(), 1)
+	assert.Contains(t, sent.all()[0], "your request was interrupted")
+}

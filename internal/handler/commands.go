@@ -6,6 +6,7 @@ import (
 	"log"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-telegram/bot"
@@ -153,8 +154,42 @@ func kindName(k chatqueue.Kind) string {
 	}
 }
 
+// NotifyShutdown tells every chat whose request was cut short by a shutdown that it
+// should send it again.
+func (h *Handler) NotifyShutdown(report []chatqueue.Interrupted) {
+	var wg sync.WaitGroup
+	for _, item := range report {
+		if text := shutdownText(item); text != "" {
+			wg.Go(func() { h.notifyWithin(item.Key, text, 3*time.Second) })
+		}
+	}
+	wg.Wait()
+}
+
+func shutdownText(item chatqueue.Interrupted) string {
+	var parts []string
+	switch {
+	case item.Running && item.Kind == chatqueue.KindUser:
+		parts = append(parts, "♻️ The bot is restarting and your request was interrupted. "+
+			"Please send it again in a minute — the conversation is kept.")
+	case item.Running:
+		parts = append(parts, "♻️ The bot is restarting; "+kindName(item.Kind)+" in progress was interrupted.")
+	}
+	if item.DroppedUser > 0 {
+		if len(parts) == 0 {
+			parts = append(parts, "♻️ The bot is restarting.")
+		}
+		parts = append(parts, fmt.Sprintf("%d queued message(s) were not processed.", item.DroppedUser))
+	}
+	return strings.Join(parts, " ")
+}
+
 func (h *Handler) notify(key chatqueue.Key, text string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	h.notifyWithin(key, text, 15*time.Second)
+}
+
+func (h *Handler) notifyWithin(key chatqueue.Key, text string, timeout time.Duration) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	if err := h.Send(ctx, key.ChatID, key.ThreadID, text, ""); err != nil {
 		log.Printf("handler: notify chat=%d thread=%d: %v", key.ChatID, key.ThreadID, err)
