@@ -92,9 +92,9 @@ func (s *Scheduler) createTaskFromCommand(cmd *scheduleCommand, chatID int64, th
 		return fmt.Errorf("create requires prompt, type, and value")
 	}
 
-	contextMode := cmd.Context
-	if contextMode == "" {
-		contextMode = model.ContextGroup
+	contextMode, err := parseContext(cmd.Context)
+	if err != nil {
+		return err
 	}
 
 	var nextRun *time.Time
@@ -120,4 +120,15 @@ func (s *Scheduler) createTaskFromCommand(cmd *scheduleCommand, chatID int64, th
 	}
 
 	return s.CreateTask(task)
+}
+
+func parseContext(value string) (string, error) {
+	switch value {
+	case "":
+		return model.ContextGroup, nil
+	case model.ContextGroup, model.ContextIsolated, model.ContextNotify:
+		return value, nil
+	default:
+		return "", fmt.Errorf("invalid context %q: want group, isolated or notify", value)
+	}
 }

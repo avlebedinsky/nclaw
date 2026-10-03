@@ -97,7 +97,7 @@ All post-CLI processing goes through `Pipeline.Process()`, which:
 The scheduler and webhook manager implement the `BlockExecutor` interface and are passed to the pipeline as executors. The handler, scheduler, and webhook packages each invoke the CLI backend independently, then call `Pipeline.Process()` for all post-processing.
 
 ### Scheduled Tasks
-`nclaw:schedule` code blocks contain JSON commands (`create`, `pause`, `resume`, `cancel`). Tasks support cron, interval, and one-time schedules. Tasks persist in SQLite and reload on startup. The scheduler implements `BlockExecutor` for the pipeline.
+`nclaw:schedule` code blocks contain JSON commands (`create`, `pause`, `resume`, `cancel`). Tasks support cron, interval, and one-time schedules, in one of three context modes: `group` (continues the chat session), `isolated` (fresh session in `<chat>/.isolated`), `notify` (no CLI run: the prompt is sent verbatim, outside the chat queue, and its command blocks are never executed). Tasks persist in SQLite and reload on startup; a task that fails to load is marked `failed` and reported to its chat, and run failures are reported with the task's prompt. The scheduler implements `BlockExecutor` for the pipeline.
 
 ### Webhooks
 `nclaw:webhook` code blocks contain JSON commands (`create`, `delete`, `list`). Webhooks register HTTP endpoints at `https://{BASE_DOMAIN}/webhooks/{UUID}`. When an external service calls a webhook URL, the request (method, headers, query params, body) is forwarded to the CLI backend in the originating chat via `Continue()`. The HTTP server returns 200 immediately; CLI processing happens asynchronously in a goroutine. Webhooks persist in SQLite alongside scheduled tasks. The webhook manager implements `BlockExecutor` for the pipeline.

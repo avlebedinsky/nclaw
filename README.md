@@ -676,7 +676,7 @@ Every morning at 8am, give me a weather summary and top news headlines
 At 3pm today, generate a summary of today's git commits
 ```
 
-Tasks persist across restarts. Each task can either continue the existing chat session or run in a fresh isolated context.
+Tasks persist across restarts. Each task can either continue the existing chat session or run in a fresh isolated context. Plain reminders ("remind me to…") are `notify` tasks: at the scheduled time the bot sends the prepared text right away, without running the agent, so they cost nothing and arrive on time even while the agent is busy. If a task fails, the chat gets a message naming the task and the error; a task that can no longer be scheduled after a restart is disabled and reported the same way.
 
 ## Webhooks
 

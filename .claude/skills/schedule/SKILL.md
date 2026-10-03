@@ -23,17 +23,20 @@ Wrap each scheduling command in a fenced code block with language `nclaw:schedul
 
 Fields:
 - `action`: `"create"` (required)
-- `prompt`: What to do when the task fires (required). Be specific and self-contained.
+- `prompt`: What to do when the task fires (required). Be specific and self-contained. For `"notify"` tasks this is the exact message the user will receive.
 - `type`: Schedule type (required). Choose carefully:
   - `"cron"` — Standard 5-field cron expression (minute hour day month weekday). For recurring at specific times.
   - `"interval"` — Go duration string (e.g., `"5m"`, `"1h30m"`, `"24h"`). For REPEATING every N time. Only use when the user explicitly wants repetition ("every hour", "each 5 minutes").
   - `"once"` — Local ISO 8601 timestamp WITHOUT "Z" suffix. For ONE-TIME reminders/actions. Use this for "remind me in X minutes", "do X at 3pm", "in 1 hour do Y". Calculate the target timestamp from current time.
 - `value`: The schedule expression (required)
-- `context`: `"group"` (default) or `"isolated"` (optional)
+- `context`: `"group"` (default), `"isolated"` or `"notify"` (optional)
 
 Context modes:
+- `"notify"`: No AI run at all — when the task fires, the `prompt` text is sent to the chat as is, instantly, even while you are busy with another request. Use it for plain reminders whose text is already known ("remind me to…", "wake me at…"). Write the prompt as the final message in the user's language, e.g. `"⏰ Call the dentist"`.
 - `"group"`: Task runs in the conversation's session (has chat history). Use for tasks needing context.
 - `"isolated"`: Task runs in a fresh session. Use for self-contained tasks. Include all needed context in the prompt.
+
+Prefer `"notify"` whenever the task only has to say something. Use `"group"` or `"isolated"` only when the task has to do work at run time: check, fetch, summarize or generate something.
 
 ### Pause, Resume, Cancel
 
@@ -81,7 +84,7 @@ The system provides a list of currently scheduled tasks in your context. Use thi
 User: "Remind me to drink water every hour"
 Response: Sure, I'll remind you every hour to drink water!
 ```nclaw:schedule
-{"action":"create","prompt":"Send a reminder: Time to drink water! Stay hydrated.","type":"interval","value":"1h","context":"isolated"}
+{"action":"create","prompt":"💧 Time to drink water! Stay hydrated.","type":"interval","value":"1h","context":"notify"}
 ```
 
 User: "Every weekday at 9am tell me good morning"
@@ -93,14 +96,14 @@ Response: Done! You'll get a good morning message every weekday at 9 AM.
 User: "Remind me in 5 minutes to check the oven"
 Response: Got it, I'll remind you in 5 minutes!
 ```nclaw:schedule
-{"action":"create","prompt":"Reminder: Check the oven!","type":"once","value":"2026-02-18T12:55:00","context":"isolated"}
+{"action":"create","prompt":"⏰ Check the oven!","type":"once","value":"2026-02-18T12:55:00","context":"notify"}
 ```
 Note: "in X minutes" = once (calculate timestamp), NOT interval.
 
 User: "Remind me at 3pm today to call the dentist"
 Response: I'll remind you at 3 PM today to call the dentist.
 ```nclaw:schedule
-{"action":"create","prompt":"Reminder: Call the dentist!","type":"once","value":"2026-02-18T15:00:00","context":"isolated"}
+{"action":"create","prompt":"⏰ Call the dentist!","type":"once","value":"2026-02-18T15:00:00","context":"notify"}
 ```
 
 User: "Cancel all my reminders"
