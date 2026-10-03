@@ -2,6 +2,7 @@ package streamjson
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -201,4 +202,31 @@ func TestStreamWriter_ResultLargeLineNotDropped(t *testing.T) {
 	assert.Equal(t, []string{huge}, got)
 	assert.Equal(t, []string{huge}, result.Messages)
 	assert.Contains(t, result.FullText, huge)
+}
+
+func hugeToolResultLine() string {
+	return `{"type":"user","message":{"content":[{"type":"tool_result","content":"` + strings.Repeat("A", 2<<20) + `"}]}}`
+}
+
+func TestParseOutput_LineOverOneMegabyte(t *testing.T) {
+	output := `{"type":"assistant","message":{"content":[{"type":"text","text":"Looking at the image."}]}}` + "\n" +
+		hugeToolResultLine() + "\n" +
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"It is a cat."}]}}` + "\n" +
+		`{"type":"result","result":"It is a cat."}`
+
+	result := ParseOutput([]byte(output))
+
+	assert.Equal(t, "It is a cat.", result.Text)
+	assert.Equal(t, []string{"Looking at the image.", "It is a cat."}, result.Messages)
+}
+
+func TestStreamWriter_LineOverOneMegabyteInChunks(t *testing.T) {
+	output := hugeToolResultLine() + "\n" + `{"type":"result","result":"done"}` + "\n"
+	w := NewStreamWriter(nil)
+	for chunk := range slices.Chunk([]byte(output), 64*1024) {
+		_, err := w.Write(chunk)
+		assert.NoError(t, err)
+	}
+
+	assert.Equal(t, "done", w.Result().Text)
 }

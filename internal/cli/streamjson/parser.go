@@ -1,10 +1,8 @@
 package streamjson
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
-	"log"
 	"strings"
 
 	"github.com/nickalie/nclaw/internal/cli"
@@ -31,14 +29,9 @@ type contentBlock struct {
 // ParseOutput parses stream-json (NDJSON) output and extracts all assistant
 // text and the final result into a cli.Result.
 func ParseOutput(output []byte) *cli.Result {
-	allText, resultText := collectStreamEvents(output)
-
-	if resultText == "" && len(allText) == 0 {
-		text := strings.TrimSpace(string(output))
-		return &cli.Result{Text: text, FullText: text}
-	}
-
-	return assembleResult(allText, resultText)
+	w := NewStreamWriter(nil)
+	w.feed(output)
+	return w.Result()
 }
 
 // assembleResult builds a cli.Result from collected assistant texts and the
@@ -56,38 +49,6 @@ func assembleResult(allText []string, resultText string) *cli.Result {
 	}
 
 	return &cli.Result{Text: resultText, FullText: fullText, Messages: allText}
-}
-
-func collectStreamEvents(output []byte) (allText []string, resultText string) {
-	scanner := bufio.NewScanner(bytes.NewReader(output))
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
-		}
-
-		var event streamEvent
-		if err := json.Unmarshal(line, &event); err != nil {
-			continue
-		}
-
-		switch event.Type {
-		case "assistant":
-			if text := extractAssistantText(event.Message); text != "" {
-				allText = append(allText, text)
-			}
-		case "result":
-			resultText = event.Result
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		log.Printf("streamjson: scan error (output may be truncated): %v", err)
-	}
-
-	return allText, resultText
 }
 
 // StreamWriter is an io.Writer that parses stream-json (NDJSON) output
@@ -112,6 +73,11 @@ func NewStreamWriter(onMessage func(string)) *StreamWriter {
 // Write captures raw bytes and processes complete NDJSON lines. It always reports
 // the full length as written so the process is never blocked.
 func (w *StreamWriter) Write(p []byte) (int, error) {
+	w.feed(p)
+	return len(p), nil
+}
+
+func (w *StreamWriter) feed(p []byte) {
 	w.raw.Write(p)
 	w.pending = append(w.pending, p...)
 
@@ -124,8 +90,6 @@ func (w *StreamWriter) Write(p []byte) (int, error) {
 		w.pending = w.pending[i+1:]
 		w.handleLine(line)
 	}
-
-	return len(p), nil
 }
 
 // Bytes returns all raw output written so far, used for error fallback text.
