@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -11,10 +12,10 @@ import (
 	"gorm.io/gorm/logger"
 
 	"github.com/nickalie/nclaw/internal/blocks"
+	"github.com/nickalie/nclaw/internal/chatqueue"
 	"github.com/nickalie/nclaw/internal/cli"
 	"github.com/nickalie/nclaw/internal/invoker"
 	"github.com/nickalie/nclaw/internal/model"
-	"github.com/nickalie/nclaw/internal/telegram"
 )
 
 // mockProvider implements cli.Provider for testing.
@@ -27,6 +28,13 @@ func (m *mockProvider) Version() (string, error) {
 }
 func (m *mockProvider) Name() string { return "mock" }
 
+type inlineRunner struct{}
+
+func (inlineRunner) Do(_ chatqueue.Key, job chatqueue.Job) error {
+	job.Fn(context.Background())
+	return nil
+}
+
 func setupTestScheduler(t *testing.T) *Scheduler {
 	t.Helper()
 	database, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{
@@ -35,7 +43,7 @@ func setupTestScheduler(t *testing.T) *Scheduler {
 	require.NoError(t, err)
 	require.NoError(t, database.AutoMigrate(&model.ScheduledTask{}, &model.TaskRunLog{}))
 
-	sched, err := New(database, invoker.New(&mockProvider{}, telegram.NewChatLocker(), invoker.Options{DataDir: t.TempDir()}), time.UTC)
+	sched, err := New(database, invoker.New(&mockProvider{}, invoker.Options{DataDir: t.TempDir()}), inlineRunner{}, time.UTC)
 	require.NoError(t, err)
 	return sched
 }

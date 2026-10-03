@@ -85,7 +85,7 @@ func newTestInvoker(t *testing.T, p cli.Provider, opts Options) *Invoker {
 		opts.Location = loc
 	}
 	opts.Now = func() time.Time { return fixedNow }
-	return New(p, telegram.NewChatLocker(), opts)
+	return New(p, opts)
 }
 
 func writeSkill(t *testing.T) string {

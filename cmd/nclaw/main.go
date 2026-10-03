@@ -15,6 +15,7 @@ import (
 	"github.com/go-telegram/bot/models"
 	"gorm.io/gorm"
 
+	"github.com/nickalie/nclaw/internal/chatqueue"
 	"github.com/nickalie/nclaw/internal/cli"
 	"github.com/nickalie/nclaw/internal/cli/claude"
 	"github.com/nickalie/nclaw/internal/cli/claudish"
@@ -28,7 +29,6 @@ import (
 	"github.com/nickalie/nclaw/internal/pipeline"
 	"github.com/nickalie/nclaw/internal/scheduler"
 	"github.com/nickalie/nclaw/internal/sendfile"
-	"github.com/nickalie/nclaw/internal/telegram"
 	"github.com/nickalie/nclaw/internal/version"
 	"github.com/nickalie/nclaw/internal/webhook"
 )
@@ -79,29 +79,34 @@ func main() {
 
 func setupBot(database *gorm.DB, provider cli.Provider) (*bot.Bot, *scheduler.Scheduler, *webhook.Manager, *webhook.Server) {
 	loc := config.Location()
-	inv := invoker.New(provider, telegram.NewChatLocker(), invokerOptions(loc, func(chatID int64, threadID int) string {
+	inv := invoker.New(provider, invokerOptions(loc, func(chatID int64, threadID int) string {
 		return scheduler.FormatTaskList(database, loc, chatID, threadID)
 	}))
 	h := &handler.Handler{Invoker: inv}
+	queue := chatqueue.New(h.RunBatch, chatqueue.Options{})
+	h.Queue = queue
 
 	b, err := bot.New(config.TelegramBotToken(),
+		bot.WithNotAsyncHandlers(),
+		bot.WithMiddlewares(handler.AllowChat),
 		bot.WithDefaultHandler(h.Default),
 		bot.WithHTTPClient(time.Minute, &http.Client{Timeout: 5 * time.Minute}),
 	)
 	if err != nil {
 		log.Fatal(err)
 	}
+	h.Bot = b
 
 	fileSenders := sendfile.Senders{
 		Doc:   newSendDocFunc(b),
 		Audio: newSendAudioFunc(b),
 	}
-	sched, err := scheduler.New(database, inv, loc)
+	sched, err := scheduler.New(database, inv, queue, loc)
 	if err != nil {
 		log.Fatal("scheduler: ", err)
 	}
 
-	webhookMgr := createWebhookManager(database, inv)
+	webhookMgr := createWebhookManager(database, inv, queue)
 	p := buildPipeline(b, fileSenders, sched, webhookMgr)
 	h.Pipeline = p
 	sched.SetPipeline(p)
@@ -298,12 +303,12 @@ func newPipelineSendFunc(b *bot.Bot) pipeline.SendFunc {
 	}
 }
 
-func createWebhookManager(database *gorm.DB, inv *invoker.Invoker) *webhook.Manager {
+func createWebhookManager(database *gorm.DB, inv *invoker.Invoker, runner webhook.Runner) *webhook.Manager {
 	domain := config.WebhookBaseDomain()
 	if domain == "" {
 		return nil
 	}
-	return webhook.NewManager(database, inv, domain)
+	return webhook.NewManager(database, inv, runner, domain)
 }
 
 func startWebhookServer(mgr *webhook.Manager) *webhook.Server {

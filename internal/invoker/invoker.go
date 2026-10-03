@@ -1,5 +1,5 @@
 // Package invoker runs a CLI backend for a chat: it picks the working directory,
-// serializes runs per chat, builds the shared system prompt and invokes the client.
+// builds the shared system prompt and invokes the client.
 package invoker
 
 import (
@@ -71,19 +71,18 @@ type Outcome struct {
 // Invoker runs the configured CLI provider on behalf of every input channel.
 type Invoker struct {
 	provider cli.Provider
-	locker   *telegram.ChatLocker
 	opts     Options
 }
 
 // New creates an Invoker. Missing Location and Now default to time.Local and time.Now.
-func New(provider cli.Provider, locker *telegram.ChatLocker, opts Options) *Invoker {
+func New(provider cli.Provider, opts Options) *Invoker {
 	if opts.Location == nil {
 		opts.Location = time.Local
 	}
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
-	return &Invoker{provider: provider, locker: locker, opts: opts}
+	return &Invoker{provider: provider, opts: opts}
 }
 
 // ProviderName returns the name of the underlying CLI backend.
@@ -96,16 +95,13 @@ func (i *Invoker) ChatDir(chatID int64, threadID int) string {
 	return telegram.ChatDir(i.opts.DataDir, chatID, threadID)
 }
 
-// Run executes one CLI invocation for the request, holding the chat's lock for its duration.
+// Run executes one CLI invocation for the request. Callers serialize runs per chat.
 func (i *Invoker) Run(ctx context.Context, req Request) Outcome {
 	out := i.dirs(req)
 	if err := os.MkdirAll(out.Dir, 0o755); err != nil {
 		out.Result, out.Err = &cli.Result{}, fmt.Errorf("invoker: mkdir %s: %w", out.Dir, err)
 		return out
 	}
-
-	unlock := i.locker.Lock(req.ChatID, req.ThreadID)
-	defer unlock()
 
 	if err := i.provider.PreInvoke(); err != nil {
 		log.Printf("invoker: pre-invoke warning: %v", err)

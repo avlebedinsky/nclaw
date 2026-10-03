@@ -12,6 +12,7 @@ import (
 	"gorm.io/gorm/logger"
 
 	"github.com/nickalie/nclaw/internal/blocks"
+	"github.com/nickalie/nclaw/internal/chatqueue"
 	"github.com/nickalie/nclaw/internal/cli"
 	"github.com/nickalie/nclaw/internal/invoker"
 	"github.com/nickalie/nclaw/internal/model"
@@ -57,9 +58,16 @@ func (m *mockClient) Continue(q string) (*cli.Result, error) {
 	return &cli.Result{Text: "mock response", FullText: "mock response"}, nil
 }
 
+type inlineRunner struct{}
+
+func (inlineRunner) Do(_ chatqueue.Key, job chatqueue.Job) error {
+	job.Fn(context.Background())
+	return nil
+}
+
 func newTestInvoker(t *testing.T, p cli.Provider) *invoker.Invoker {
 	t.Helper()
-	return invoker.New(p, telegram.NewChatLocker(), invoker.Options{
+	return invoker.New(p, invoker.Options{
 		DataDir:  t.TempDir(),
 		TaskList: func(int64, int) string { return "Current scheduled tasks: none" },
 	})
@@ -75,7 +83,7 @@ func setupTestManager(t *testing.T) *Manager {
 	require.NoError(t, err)
 	require.NoError(t, database.AutoMigrate(&model.WebhookRegistration{}))
 
-	mgr := NewManager(database, newTestInvoker(t, &mockProvider{}), "example.com")
+	mgr := NewManager(database, newTestInvoker(t, &mockProvider{}), inlineRunner{}, "example.com")
 	mgr.SetPipeline(pipeline.New(noopSend, sendfile.Senders{}, true))
 	return mgr
 }
@@ -586,7 +594,7 @@ func TestProcessIncoming_UsesSharedPromptAndDeliversReply(t *testing.T) {
 	require.NoError(t, database.AutoMigrate(&model.WebhookRegistration{}))
 
 	provider := &mockProvider{}
-	m := NewManager(database, newTestInvoker(t, provider), "example.com")
+	m := NewManager(database, newTestInvoker(t, provider), inlineRunner{}, "example.com")
 	var sent []string
 	m.SetPipeline(pipeline.New(func(_ context.Context, _ int64, _ int, text, _ string) error {
 		sent = append(sent, text)

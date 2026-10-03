@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/nickalie/nclaw/internal/chatqueue"
 	"github.com/nickalie/nclaw/internal/cli"
 	"github.com/nickalie/nclaw/internal/config"
 	"github.com/nickalie/nclaw/internal/invoker"
@@ -608,8 +609,17 @@ func newTestBot(t *testing.T) *bot.Bot {
 
 func newTestHandler(t *testing.T, provider cli.Provider, send pipeline.SendFunc) *Handler {
 	t.Helper()
-	inv := invoker.New(provider, telegram.NewChatLocker(), invoker.Options{DataDir: t.TempDir()})
-	return &Handler{Invoker: inv, Pipeline: pipeline.New(send, sendfile.Senders{}, false)}
+	inv := invoker.New(provider, invoker.Options{DataDir: t.TempDir()})
+	h := &Handler{Invoker: inv, Pipeline: pipeline.New(send, sendfile.Senders{}, false), Bot: newTestBot(t)}
+	h.Queue = chatqueue.New(h.RunBatch, chatqueue.Options{})
+	return h
+}
+
+func waitQueue(t *testing.T, h *Handler) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	require.NoError(t, h.Queue.Wait(ctx))
 }
 
 func recordSend(sent *[]string) pipeline.SendFunc {
@@ -628,19 +638,36 @@ func TestDefault_NilMessage(t *testing.T) {
 	h.Default(context.Background(), newTestBot(t), update)
 }
 
-func TestDefault_NonWhitelisted(t *testing.T) {
+func TestAllowChat(t *testing.T) {
 	viper.Set("telegram.whitelist_chat_ids", "111,222")
 	defer viper.Reset()
 
-	h := &Handler{}
-	update := &models.Update{
-		Message: &models.Message{
-			Text: "hello",
-			Chat: models.Chat{ID: 999},
-		},
+	var passed []int64
+	next := AllowChat(func(_ context.Context, _ *bot.Bot, u *models.Update) { passed = append(passed, u.Message.Chat.ID) })
+	for _, u := range []*models.Update{
+		{Message: &models.Message{Text: "hi", Chat: models.Chat{ID: 999}}},
+		{Message: &models.Message{Text: "hi", Chat: models.Chat{ID: 111}}},
+		{},
+	} {
+		next(context.Background(), nil, u)
 	}
-	// Should return without spawning goroutine (non-whitelisted).
-	h.Default(context.Background(), newTestBot(t), update)
+
+	assert.Equal(t, []int64{111}, passed)
+}
+
+func TestDefault_BurstIsAnsweredOnce(t *testing.T) {
+	client := &mockClient{contResult: &cli.Result{Text: "both done", FullText: "both done"}}
+	var sent []string
+	h := newTestHandler(t, &mockProvider{client: client}, recordSend(&sent))
+
+	for _, text := range []string{"first", "second"} {
+		h.Default(context.Background(), nil, &models.Update{Message: &models.Message{Text: text, Chat: models.Chat{ID: 100}}})
+	}
+	waitQueue(t, h)
+
+	assert.Equal(t, []string{"both done"}, sent)
+	assert.Contains(t, client.lastQuery, "--- Message 1 ---\nfirst")
+	assert.Contains(t, client.lastQuery, "--- Message 2 ---\nsecond")
 }
 
 func TestDefault_EmptyMessage(t *testing.T) {
@@ -737,15 +764,16 @@ func TestBuildPrompt_WithAttachmentNoText(t *testing.T) {
 	assert.NotContains(t, result, "\n\n\n")
 }
 
-// --- processMessage tests ---
+// --- RunBatch tests ---
 
-func TestProcessMessage_Success(t *testing.T) {
+var testKey = chatqueue.Key{ChatID: 100}
+
+func TestRunBatch_Success(t *testing.T) {
 	client := &mockClient{contResult: &cli.Result{Text: "cli response", FullText: "cli response"}}
 	var sent []string
 	h := newTestHandler(t, &mockProvider{client: client}, recordSend(&sent))
 
-	msg := &models.Message{Text: "hello", Chat: models.Chat{ID: 100}}
-	h.processMessage(context.Background(), newTestBot(t), msg, "hello", nil)
+	h.RunBatch(context.Background(), testKey, []Inbound{{text: "hello"}})
 
 	assert.Equal(t, []string{"cli response"}, sent)
 	assert.True(t, strings.HasSuffix(client.lastQuery, "\n\nhello"))
@@ -753,38 +781,91 @@ func TestProcessMessage_Success(t *testing.T) {
 	assert.Contains(t, client.systemPrompt, telegram.Prompt)
 }
 
-func TestProcessMessage_CLIError(t *testing.T) {
+func TestRunBatch_CLIError(t *testing.T) {
 	client := &mockClient{contErr: fmt.Errorf("boom")}
 	var sent []string
 	h := newTestHandler(t, &mockProvider{client: client}, recordSend(&sent))
 
-	msg := &models.Message{Text: "hello", Chat: models.Chat{ID: 100}}
-	h.processMessage(context.Background(), newTestBot(t), msg, "hello", nil)
+	h.RunBatch(context.Background(), testKey, []Inbound{{text: "hello"}})
 
 	require.Len(t, sent, 1)
 	assert.Contains(t, sent[0], "error: boom")
 }
 
-func TestProcessMessage_CLIErrorKeepsPartialOutput(t *testing.T) {
+func TestRunBatch_CLIErrorKeepsPartialOutput(t *testing.T) {
 	client := &mockClient{contResult: &cli.Result{Text: "partial output", FullText: "partial output"}, contErr: fmt.Errorf("timeout")}
 	var sent []string
 	h := newTestHandler(t, &mockProvider{client: client}, recordSend(&sent))
 
-	msg := &models.Message{Text: "hello", Chat: models.Chat{ID: 100}}
-	h.processMessage(context.Background(), newTestBot(t), msg, "hello", nil)
+	h.RunBatch(context.Background(), testKey, []Inbound{{text: "hello"}})
 
 	assert.Equal(t, []string{"partial output"}, sent)
 }
 
-func TestProcessMessage_IncludesReplyContext(t *testing.T) {
-	client := &mockClient{contResult: &cli.Result{Text: "ok", FullText: "ok"}}
-	var sent []string
-	h := newTestHandler(t, &mockProvider{client: client}, recordSend(&sent))
+func TestRunBatch_StoppedRunSendsNothing(t *testing.T) {
+	for _, cause := range []error{chatqueue.ErrStopped, chatqueue.ErrShuttingDown} {
+		client := &mockClient{contResult: &cli.Result{Text: "half"}, contErr: fmt.Errorf("claude: %w", cause)}
+		var sent []string
+		h := newTestHandler(t, &mockProvider{client: client}, recordSend(&sent))
 
-	msg := &models.Message{Text: "and this?", Chat: models.Chat{ID: 100}, ReplyToMessage: &models.Message{Text: "earlier"}}
-	h.processMessage(context.Background(), newTestBot(t), msg, "and this?", nil)
+		h.RunBatch(context.Background(), testKey, []Inbound{{text: "hello"}})
 
-	assert.Contains(t, client.lastQuery, "[Replying to message: earlier]\n\nand this?")
+		assert.Empty(t, sent, cause.Error())
+	}
+}
+
+func TestNewInbound_IncludesReplyContext(t *testing.T) {
+	msg := &models.Message{Text: "and this?", Chat: models.Chat{ID: 100}, ReplyToMessage: &models.Message{Text: "earlier"}, MediaGroupID: "g1"}
+
+	in, ok := newInbound(msg)
+
+	require.True(t, ok)
+	assert.Equal(t, "[Replying to message: earlier]\n\nand this?", in.text)
+	assert.Equal(t, "g1", in.mediaGroup)
+	_, ok = newInbound(&models.Message{Chat: models.Chat{ID: 1}})
+	assert.False(t, ok)
+}
+
+func TestSettleFor(t *testing.T) {
+	assert.Equal(t, messageSettle, settleFor(&models.Message{}))
+	assert.Equal(t, albumSettle, settleFor(&models.Message{MediaGroupID: "g"}))
+}
+
+func TestComposePrompt_SingleMessageUnchanged(t *testing.T) {
+	assert.Equal(t, "hello", composePrompt(context.Background(), nil, t.TempDir(), []Inbound{{text: "hello"}}))
+}
+
+func TestComposePrompt_AlbumWithCaptionAndFollowUp(t *testing.T) {
+	srv := newFileServer(t, map[string]string{"f1": "one", "f2": "two"})
+	b, err := bot.New("123:SECRET", bot.WithServerURL(srv.URL), bot.WithSkipGetMe())
+	require.NoError(t, err)
+	dir := t.TempDir()
+
+	prompt := composePrompt(context.Background(), b, dir, []Inbound{
+		{text: "what is on these?", att: &attachment{fileID: "f1", fileUniqueID: "u1", filename: "photo.jpg"}, mediaGroup: "g1"},
+		{att: &attachment{fileID: "f2", fileUniqueID: "u2", filename: "photo.jpg"}, mediaGroup: "g1"},
+		{text: "and compare them"},
+	})
+
+	assert.Contains(t, prompt, "The user sent 2 messages in a row")
+	assert.Contains(t, prompt, "--- Message 1 ---\nI'm sending you 2 files: photo.jpg (saved at "+filepath.Join(dir, "photo_u1.jpg")+
+		"), photo.jpg (saved at "+filepath.Join(dir, "photo_u2.jpg")+"). Please read them.\n\nwhat is on these?")
+	assert.Contains(t, prompt, "--- Message 2 ---\nand compare them")
+}
+
+func TestComposePrompt_AlbumDownloadFailure(t *testing.T) {
+	srv := newFileServer(t, map[string]string{"f1": "one"})
+	b, err := bot.New("123:SECRET", bot.WithServerURL(srv.URL), bot.WithSkipGetMe())
+	require.NoError(t, err)
+
+	prompt := composePrompt(context.Background(), b, t.TempDir(), []Inbound{
+		{att: &attachment{fileID: "f1", fileUniqueID: "u1", filename: "a.jpg"}, mediaGroup: "g"},
+		{att: &attachment{fileID: "missing", fileUniqueID: "u2", filename: "b.jpg"}, mediaGroup: "g"},
+	})
+
+	assert.Contains(t, prompt, "I'm sending you 1 files: a.jpg")
+	assert.Contains(t, prompt, "(these attachments failed to download: b.jpg")
+	assert.NotContains(t, prompt, "SECRET")
 }
 
 // --- sendTyping tests ---

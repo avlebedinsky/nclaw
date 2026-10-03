@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
+	"github.com/nickalie/nclaw/internal/chatqueue"
 	"github.com/nickalie/nclaw/internal/cli"
 	"github.com/nickalie/nclaw/internal/db"
 	"github.com/nickalie/nclaw/internal/invoker"
@@ -26,11 +27,17 @@ const (
 	finishedTaskRetention = 30 * 24 * time.Hour
 )
 
+// Runner executes a job in its chat's queue and waits for it.
+type Runner interface {
+	Do(key chatqueue.Key, job chatqueue.Job) error
+}
+
 // Scheduler manages scheduled tasks using gocron and SQLite persistence.
 type Scheduler struct {
 	cron     gocron.Scheduler
 	db       *gorm.DB
 	invoker  *invoker.Invoker
+	runner   Runner
 	pipeline *pipeline.Pipeline
 	loc      *time.Location
 	jobs     map[string]uuid.UUID // taskID -> gocron job UUID
@@ -39,8 +46,8 @@ type Scheduler struct {
 	mu       sync.Mutex
 }
 
-// New creates a new Scheduler that runs tasks through inv in the given timezone.
-func New(database *gorm.DB, inv *invoker.Invoker, loc *time.Location) (*Scheduler, error) {
+// New creates a new Scheduler that runs tasks through inv, queued per chat by runner, in loc.
+func New(database *gorm.DB, inv *invoker.Invoker, runner Runner, loc *time.Location) (*Scheduler, error) {
 	cron, err := gocron.NewScheduler(gocron.WithLocation(loc))
 	if err != nil {
 		return nil, fmt.Errorf("scheduler: create: %w", err)
@@ -50,6 +57,7 @@ func New(database *gorm.DB, inv *invoker.Invoker, loc *time.Location) (*Schedule
 		cron:     cron,
 		db:       database,
 		invoker:  inv,
+		runner:   runner,
 		loc:      loc,
 		jobs:     make(map[string]uuid.UUID),
 		running:  make(map[string]bool),
@@ -247,13 +255,36 @@ func (s *Scheduler) executeTask(taskID string) {
 	s.mu.Unlock()
 	defer s.clearRunState(taskID)
 
-	task, err := db.GetTask(s.db, taskID)
+	task, err := s.activeTask(taskID)
 	if err != nil {
-		log.Printf("scheduler: execute: task %s not found: %v", taskID, err)
+		log.Printf("scheduler: skipping task %s: %v", taskID, err)
 		return
 	}
+
+	key := chatqueue.Key{ChatID: task.ChatID, ThreadID: task.ThreadID}
+	job := chatqueue.Job{Kind: chatqueue.KindScheduled, Label: truncate(task.Prompt, 40), Fn: func(ctx context.Context) {
+		s.runTask(ctx, taskID)
+	}}
+	if err := s.runner.Do(key, job); err != nil {
+		log.Printf("scheduler: task %s not run: %v", taskID, err)
+	}
+}
+
+func (s *Scheduler) activeTask(taskID string) (*model.ScheduledTask, error) {
+	task, err := db.GetTask(s.db, taskID)
+	if err != nil {
+		return nil, err
+	}
 	if task.Status != model.StatusActive {
-		log.Printf("scheduler: skipping task %s (status=%s)", taskID, task.Status)
+		return nil, fmt.Errorf("status is %s", task.Status)
+	}
+	return task, nil
+}
+
+func (s *Scheduler) runTask(ctx context.Context, taskID string) {
+	task, err := s.activeTask(taskID)
+	if err != nil {
+		log.Printf("scheduler: skipping task %s: %v", taskID, err)
 		return
 	}
 
@@ -261,10 +292,14 @@ func (s *Scheduler) executeTask(taskID string) {
 		taskID, task.ScheduleType, task.ScheduleValue, truncate(task.Prompt, 60))
 
 	start := time.Now()
-	out := s.invokeCLI(task)
+	out := s.invokeCLI(ctx, task)
 	result, runErr := out.Result, out.Err
 	duration := time.Since(start)
 
+	if errors.Is(runErr, chatqueue.ErrShuttingDown) {
+		log.Printf("scheduler: task %s interrupted by shutdown, will run again after restart", taskID)
+		return
+	}
 	if runErr != nil {
 		log.Printf("scheduler: task %s failed after %s: %v", taskID, duration, runErr)
 	} else {
@@ -315,14 +350,14 @@ func (s *Scheduler) clearRunState(taskID string) {
 	s.mu.Unlock()
 }
 
-func (s *Scheduler) invokeCLI(task *model.ScheduledTask) invoker.Outcome {
+func (s *Scheduler) invokeCLI(ctx context.Context, task *model.ScheduledTask) invoker.Outcome {
 	mode := invoker.Continue
 	if task.ContextMode == model.ContextIsolated {
 		mode = invoker.Isolated
 	}
 
 	log.Printf("scheduler: invoking %s for task %s context=%s", s.invoker.ProviderName(), task.ID, task.ContextMode)
-	return s.invoker.Run(context.Background(), invoker.Request{
+	return s.invoker.Run(ctx, invoker.Request{
 		ChatID:   task.ChatID,
 		ThreadID: task.ThreadID,
 		Prompt:   "[SCHEDULED TASK - Running automatically, not in response to a user message]\n\n" + task.Prompt,
@@ -397,6 +432,10 @@ func (s *Scheduler) resolveNextRun(task *model.ScheduledTask) *time.Time {
 }
 
 func (s *Scheduler) sendResult(task *model.ScheduledTask, result *cli.Result, runErr error, dir string) {
+	if errors.Is(runErr, chatqueue.ErrStopped) {
+		log.Printf("scheduler: task %s stopped by user, skipping send", task.ID)
+		return
+	}
 	if s.pipeline == nil {
 		log.Printf("scheduler: pipeline not ready, dropping result for task %s", task.ID)
 		return

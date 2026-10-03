@@ -604,7 +604,7 @@ func setupTestSchedulerWithMockCLI(t *testing.T) *Scheduler {
 	require.NoError(t, err)
 	require.NoError(t, database.AutoMigrate(&model.ScheduledTask{}, &model.TaskRunLog{}))
 
-	sched, err := New(database, invoker.New(&mockCLIProvider{}, telegram.NewChatLocker(), invoker.Options{DataDir: t.TempDir()}), time.UTC)
+	sched, err := New(database, invoker.New(&mockCLIProvider{}, invoker.Options{DataDir: t.TempDir()}), inlineRunner{}, time.UTC)
 	require.NoError(t, err)
 	return sched
 }
@@ -945,11 +945,11 @@ func setupRecordingScheduler(t *testing.T) (*Scheduler, *recordingProvider, *inv
 
 	provider := &recordingProvider{}
 	dataDir := t.TempDir()
-	inv := invoker.New(provider, telegram.NewChatLocker(), invoker.Options{
+	inv := invoker.New(provider, invoker.Options{
 		DataDir:  dataDir,
 		TaskList: func(chatID int64, threadID int) string { return FormatTaskList(database, time.UTC, chatID, threadID) },
 	})
-	s, err := New(database, inv, time.UTC)
+	s, err := New(database, inv, inlineRunner{}, time.UTC)
 	require.NoError(t, err)
 
 	var sent []string

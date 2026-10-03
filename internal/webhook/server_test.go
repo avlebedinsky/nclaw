@@ -28,7 +28,7 @@ func setupTestServer(t *testing.T) (*Server, *Manager) {
 	require.NoError(t, database.AutoMigrate(&model.WebhookRegistration{}))
 
 	send := func(_ context.Context, _ int64, _ int, _, _ string) error { return nil }
-	mgr := NewManager(database, newTestInvoker(t, &mockProvider{}), "example.com")
+	mgr := NewManager(database, newTestInvoker(t, &mockProvider{}), inlineRunner{}, "example.com")
 	mgr.SetPipeline(pipeline.New(send, sendfile.Senders{}, true))
 	srv := NewServer(mgr)
 	return srv, mgr

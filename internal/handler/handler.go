@@ -13,6 +13,7 @@ import (
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
 
+	"github.com/nickalie/nclaw/internal/chatqueue"
 	"github.com/nickalie/nclaw/internal/cli"
 	"github.com/nickalie/nclaw/internal/config"
 	"github.com/nickalie/nclaw/internal/invoker"
@@ -23,58 +24,75 @@ import (
 type Handler struct {
 	Invoker  *invoker.Invoker
 	Pipeline *pipeline.Pipeline
+	Queue    *chatqueue.Queue[Inbound]
+	Bot      *bot.Bot
 }
 
-// Default handles incoming messages by forwarding them to Claude Code.
-func (h *Handler) Default(parentCtx context.Context, b *bot.Bot, update *models.Update) {
-	if update.Message == nil {
-		return
+// AllowChat is bot middleware that drops updates without a message or from chats
+// outside the whitelist.
+func AllowChat(next bot.HandlerFunc) bot.HandlerFunc {
+	return func(ctx context.Context, b *bot.Bot, update *models.Update) {
+		if update.Message == nil {
+			return
+		}
+		if !isChatAllowed(update.Message.Chat.ID) {
+			log.Printf("handler: ignoring message from non-whitelisted chat=%d", update.Message.Chat.ID)
+			return
+		}
+		next(ctx, b, update)
 	}
+}
 
+// Default queues an incoming message for its chat; it never blocks on the CLI.
+func (h *Handler) Default(_ context.Context, _ *bot.Bot, update *models.Update) {
 	msg := update.Message
-
-	if !isChatAllowed(msg.Chat.ID) {
-		log.Printf("handler: ignoring message from non-whitelisted chat=%d", msg.Chat.ID)
+	if msg == nil {
 		return
 	}
 
-	text, att := resolveContent(msg)
-	if text == "" && att == nil {
+	in, ok := newInbound(msg)
+	if !ok {
 		log.Printf("handler: skipping update (no text or attachment)")
 		return
 	}
 
-	go h.processMessage(parentCtx, b, msg, text, att)
+	key := chatqueue.Key{ChatID: msg.Chat.ID, ThreadID: msg.MessageThreadID}
+	if err := h.Queue.Enqueue(key, in, settleFor(msg)); err != nil {
+		log.Printf("handler: chat=%d thread=%d message not queued: %v", key.ChatID, key.ThreadID, err)
+	}
 }
 
-func (h *Handler) processMessage(ctx context.Context, b *bot.Bot, msg *models.Message, text string, att *attachment) {
-	text = withReplyContext(msg, text)
-
-	chatID := msg.Chat.ID
-	threadID := msg.MessageThreadID
-	dir := h.Invoker.ChatDir(chatID, threadID)
+// RunBatch answers a batch of queued messages from one chat with a single CLI run.
+func (h *Handler) RunBatch(ctx context.Context, key chatqueue.Key, batch []Inbound) {
+	dir := h.Invoker.ChatDir(key.ChatID, key.ThreadID)
 	ensureDir(dir)
 
 	typingCtx, stopTyping := context.WithCancel(ctx)
 	defer stopTyping()
+	go sendTyping(typingCtx, h.Bot, key.ChatID, key.ThreadID)
 
-	go sendTyping(typingCtx, b, chatID, threadID)
-
-	prompt := buildPrompt(ctx, b, text, att, dir)
-	log.Printf("handler: received message from chat=%d thread=%d text_len=%d hasFile=%v", chatID, threadID, len(text), att != nil)
+	prompt := composePrompt(ctx, h.Bot, dir, batch)
+	log.Printf("handler: running %d message(s) for chat=%d thread=%d prompt_len=%d", len(batch), key.ChatID, key.ThreadID, len(prompt))
 
 	var stream *pipeline.StreamState
 	out := h.Invoker.Run(ctx, invoker.Request{
-		ChatID:   chatID,
-		ThreadID: threadID,
+		ChatID:   key.ChatID,
+		ThreadID: key.ThreadID,
 		Prompt:   prompt,
 		Configure: func(c cli.Client) {
-			stream = h.Pipeline.AttachStream(ctx, c, chatID, threadID)
+			stream = h.Pipeline.AttachStream(ctx, c, key.ChatID, key.ThreadID)
 		},
 	})
 	stopTyping()
 
-	h.Pipeline.Process(ctx, withErrorText(out.Result, out.Err), out.Err, chatID, threadID, out.Dir, stream.Streamed())
+	if errors.Is(out.Err, chatqueue.ErrStopped) || errors.Is(out.Err, chatqueue.ErrShuttingDown) {
+		log.Printf("handler: run for chat=%d thread=%d interrupted: %v", key.ChatID, key.ThreadID, out.Err)
+		return
+	}
+
+	deliverCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	h.Pipeline.Process(deliverCtx, withErrorText(out.Result, out.Err), out.Err, key.ChatID, key.ThreadID, out.Dir, stream.Streamed())
 }
 
 func withErrorText(result *cli.Result, err error) *cli.Result {

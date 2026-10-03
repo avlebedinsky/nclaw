@@ -11,6 +11,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"github.com/nickalie/nclaw/internal/chatqueue"
 	"github.com/nickalie/nclaw/internal/cli"
 	"github.com/nickalie/nclaw/internal/db"
 	"github.com/nickalie/nclaw/internal/invoker"
@@ -48,21 +49,28 @@ var sensitiveHeaders = map[string]bool{
 // Any header name containing one of these substrings (case-insensitive) is redacted.
 var sensitiveSubstrings = []string{"token", "secret", "signature", "api-key", "api_key", "auth"}
 
+// Runner executes a job in its chat's queue and waits for it.
+type Runner interface {
+	Do(key chatqueue.Key, job chatqueue.Job) error
+}
+
 // Manager handles webhook registration and incoming webhook processing.
 type Manager struct {
 	db         *gorm.DB
 	invoker    *invoker.Invoker
+	runner     Runner
 	pipeline   *pipeline.Pipeline
 	baseDomain string
 	sem        chan struct{}
 	wg         sync.WaitGroup
 }
 
-// NewManager creates a new webhook Manager.
-func NewManager(database *gorm.DB, inv *invoker.Invoker, baseDomain string) *Manager {
+// NewManager creates a webhook Manager whose requests run through inv, queued per chat by runner.
+func NewManager(database *gorm.DB, inv *invoker.Invoker, runner Runner, baseDomain string) *Manager {
 	return &Manager{
 		db:         database,
 		invoker:    inv,
+		runner:     runner,
 		baseDomain: baseDomain,
 		sem:        make(chan struct{}, maxConcurrentWebhooks),
 	}
@@ -150,20 +158,35 @@ func (m *Manager) processIncoming(wh *model.WebhookRegistration, req IncomingReq
 		return
 	}
 
-	out := m.invoker.Run(context.Background(), invoker.Request{
+	key := chatqueue.Key{ChatID: wh.ChatID, ThreadID: wh.ThreadID}
+	job := chatqueue.Job{Kind: chatqueue.KindWebhook, Label: wh.Description, Fn: func(ctx context.Context) {
+		m.runIncoming(ctx, wh, req)
+	}}
+	if err := m.runner.Do(key, job); err != nil {
+		log.Printf("webhook: request for %s not run: %v", wh.ID, err)
+	}
+}
+
+func (m *Manager) runIncoming(ctx context.Context, wh *model.WebhookRegistration, req IncomingRequest) {
+	out := m.invoker.Run(ctx, invoker.Request{
 		ChatID:   wh.ChatID,
 		ThreadID: wh.ThreadID,
 		Prompt:   buildIncomingPrompt(wh, req),
 	})
+	if errors.Is(out.Err, chatqueue.ErrStopped) || errors.Is(out.Err, chatqueue.ErrShuttingDown) {
+		log.Printf("webhook: request for %s interrupted: %v", wh.ID, out.Err)
+		return
+	}
+
 	result := out.Result
 	if out.Err != nil && result.Text == "" {
 		result = &cli.Result{Text: "Webhook processing failed", FullText: "Webhook processing failed"}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	sendCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
 
-	m.pipeline.Process(ctx, result, out.Err, wh.ChatID, wh.ThreadID, out.Dir, false)
+	m.pipeline.Process(sendCtx, result, out.Err, wh.ChatID, wh.ThreadID, out.Dir, false)
 }
 
 func isSensitiveHeader(name string) bool {
