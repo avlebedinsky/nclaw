@@ -243,3 +243,61 @@ func TestFormatTaskList_DifferentChat(t *testing.T) {
 	result := s.FormatTaskList(100, 0)
 	assert.Equal(t, "Current scheduled tasks: none", result)
 }
+
+func TestExecuteBlocks_TaskActionsRequireOwner(t *testing.T) {
+	cases := []struct {
+		name     string
+		chatID   int64
+		threadID int
+	}{
+		{"other chat", 200, 0},
+		{"other thread", 100, 5},
+	}
+	for _, tc := range cases {
+		for _, action := range []string{"pause", "resume", "cancel"} {
+			t.Run(tc.name+"/"+action, func(t *testing.T) {
+				s := setupTestScheduler(t)
+				task := &model.ScheduledTask{
+					ID: model.GenerateTaskID(), ChatID: 100, Prompt: "p",
+					ScheduleType: model.ScheduleInterval, ScheduleValue: "1h",
+					ContextMode: model.ContextGroup, Status: model.StatusPaused, CreatedAt: time.Now(),
+				}
+				require.NoError(t, s.db.Create(task).Error)
+
+				block := "```nclaw:schedule\n{\"action\":\"" + action + "\",\"task_id\":\"" + task.ID + "\"}\n```"
+				result := s.ExecuteBlocks(block, tc.chatID, tc.threadID)
+				assert.Contains(t, result, "task not found: "+task.ID)
+
+				var got model.ScheduledTask
+				require.NoError(t, s.db.First(&got, "id = ?", task.ID).Error)
+				assert.Equal(t, model.StatusPaused, got.Status)
+			})
+		}
+	}
+}
+
+func TestExecuteBlocks_TaskActionByOwner(t *testing.T) {
+	s := setupTestScheduler(t)
+	s.Start()
+	defer s.Shutdown()
+
+	task := &model.ScheduledTask{
+		ID: model.GenerateTaskID(), ChatID: 100, ThreadID: 5, Prompt: "p",
+		ScheduleType: model.ScheduleInterval, ScheduleValue: "1h",
+		ContextMode: model.ContextGroup, Status: model.StatusActive, CreatedAt: time.Now(),
+	}
+	require.NoError(t, s.CreateTask(task))
+
+	block := "```nclaw:schedule\n{\"action\":\"pause\",\"task_id\":\"" + task.ID + "\"}\n```"
+	assert.Empty(t, s.ExecuteBlocks(block, 100, 5))
+
+	var got model.ScheduledTask
+	require.NoError(t, s.db.First(&got, "id = ?", task.ID).Error)
+	assert.Equal(t, model.StatusPaused, got.Status)
+}
+
+func TestExecuteBlocks_TaskActionUnknownTask(t *testing.T) {
+	s := setupTestScheduler(t)
+	result := s.ExecuteBlocks("```nclaw:schedule\n{\"action\":\"cancel\",\"task_id\":\"task-missing\"}\n```", 100, 0)
+	assert.Contains(t, result, "task not found: task-missing")
+}

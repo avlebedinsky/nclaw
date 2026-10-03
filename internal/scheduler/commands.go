@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nickalie/nclaw/internal/db"
 	"github.com/nickalie/nclaw/internal/model"
 )
 
@@ -56,15 +57,36 @@ func (s *Scheduler) executeCommand(jsonStr string, chatID int64, threadID int) e
 	switch cmd.Action {
 	case "create":
 		return s.createTaskFromCommand(&cmd, chatID, threadID)
-	case "pause":
-		return s.PauseTask(cmd.TaskID)
-	case "resume":
-		return s.ResumeTask(cmd.TaskID)
-	case "cancel":
-		return s.CancelTask(cmd.TaskID)
+	case "pause", "resume", "cancel":
+		return s.applyTaskAction(cmd.Action, cmd.TaskID, chatID, threadID)
 	default:
 		return fmt.Errorf("unknown action %q", cmd.Action)
 	}
+}
+
+func (s *Scheduler) applyTaskAction(action, taskID string, chatID int64, threadID int) error {
+	if err := s.checkOwner(taskID, chatID, threadID); err != nil {
+		return err
+	}
+	switch action {
+	case "pause":
+		return s.PauseTask(taskID)
+	case "resume":
+		return s.ResumeTask(taskID)
+	default:
+		return s.CancelTask(taskID)
+	}
+}
+
+func (s *Scheduler) checkOwner(taskID string, chatID int64, threadID int) error {
+	task, err := db.GetTask(s.db, taskID)
+	if err != nil {
+		return fmt.Errorf("task not found: %s: %w", taskID, err)
+	}
+	if task.ChatID != chatID || task.ThreadID != threadID {
+		return fmt.Errorf("task not found: %s", taskID)
+	}
+	return nil
 }
 
 func (s *Scheduler) createTaskFromCommand(cmd *scheduleCommand, chatID int64, threadID int) error {
