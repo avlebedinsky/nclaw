@@ -312,3 +312,46 @@ func TestRun_ParentCancelStopsRun(t *testing.T) {
 		t.Fatal("run was not canceled")
 	}
 }
+
+func TestResetSession_ArchivesWithSessionStore(t *testing.T) {
+	p := &nativeProvider{fakeProvider: fakeProvider{client: &fakeClient{result: &cli.Result{}}}}
+	inv := newTestInvoker(t, p, Options{})
+
+	require.NoError(t, inv.ResetSession(5, 1))
+
+	assert.Equal(t, []string{inv.ChatDir(5, 1)}, p.archived)
+}
+
+func TestResetSession_MarkerStartsFreshOnce(t *testing.T) {
+	client := &fakeClient{result: &cli.Result{Text: "ok"}}
+	inv := newTestInvoker(t, &fakeProvider{client: client}, Options{})
+
+	require.NoError(t, inv.ResetSession(5, 0))
+	inv.Run(context.Background(), Request{ChatID: 5, Prompt: "first"})
+	assert.Equal(t, "ask", client.mode)
+
+	inv.Run(context.Background(), Request{ChatID: 5, Prompt: "second"})
+	assert.Equal(t, "continue", client.mode)
+}
+
+func TestResetSession_MarkerKeptWhenRunFails(t *testing.T) {
+	client := &fakeClient{err: errors.New("boom")}
+	inv := newTestInvoker(t, &fakeProvider{client: client}, Options{})
+
+	require.NoError(t, inv.ResetSession(5, 0))
+	inv.Run(context.Background(), Request{ChatID: 5, Prompt: "x"})
+	inv.Run(context.Background(), Request{ChatID: 5, Prompt: "y"})
+
+	assert.Equal(t, "ask", client.mode)
+}
+
+func TestSessionSize(t *testing.T) {
+	inv := newTestInvoker(t, &nativeProvider{size: 42}, Options{MaxSessionBytes: 100})
+	size, ok := inv.SessionSize(1, 0)
+	assert.True(t, ok)
+	assert.Equal(t, int64(42), size)
+	assert.Equal(t, int64(100), inv.MaxSessionBytes())
+
+	_, ok = newTestInvoker(t, &fakeProvider{}, Options{}).SessionSize(1, 0)
+	assert.False(t, ok)
+}

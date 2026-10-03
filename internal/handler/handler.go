@@ -22,10 +22,12 @@ import (
 
 // Handler processes incoming Telegram messages.
 type Handler struct {
-	Invoker  *invoker.Invoker
-	Pipeline *pipeline.Pipeline
-	Queue    *chatqueue.Queue[Inbound]
-	Bot      *bot.Bot
+	Invoker     *invoker.Invoker
+	Pipeline    *pipeline.Pipeline
+	Queue       *chatqueue.Queue[Inbound]
+	Bot         *bot.Bot
+	BotUsername string
+	Send        pipeline.SendFunc
 }
 
 // AllowChat is bot middleware that drops updates without a message or from chats
@@ -47,6 +49,9 @@ func AllowChat(next bot.HandlerFunc) bot.HandlerFunc {
 func (h *Handler) Default(_ context.Context, _ *bot.Bot, update *models.Update) {
 	msg := update.Message
 	if msg == nil {
+		return
+	}
+	if _, forMe, isCmd := parseCommand(msg.Text, h.BotUsername); isCmd && !forMe {
 		return
 	}
 

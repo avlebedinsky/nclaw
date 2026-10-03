@@ -24,6 +24,8 @@ const (
 	Isolated
 )
 
+const freshSessionMarker = ".nclaw-new-session"
+
 // IsolatedDirName is the chat subdirectory where isolated runs execute, so their
 // sessions never become the chat's most recent conversation.
 const IsolatedDirName = ".isolated"
@@ -95,6 +97,33 @@ func (i *Invoker) ChatDir(chatID int64, threadID int) string {
 	return telegram.ChatDir(i.opts.DataDir, chatID, threadID)
 }
 
+// ResetSession makes the chat's next run start a new conversation: providers that store
+// sessions archive the current one, others start fresh on the next run via a marker file.
+func (i *Invoker) ResetSession(chatID int64, threadID int) error {
+	dir := i.ChatDir(chatID, threadID)
+	if store, ok := i.provider.(cli.SessionStore); ok {
+		return store.ArchiveSession(dir)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, freshSessionMarker), nil, 0o644)
+}
+
+// SessionSize reports the size of the chat's current session, when the provider can measure it.
+func (i *Invoker) SessionSize(chatID int64, threadID int) (int64, bool) {
+	store, ok := i.provider.(cli.SessionStore)
+	if !ok {
+		return 0, false
+	}
+	return store.SessionSize(i.ChatDir(chatID, threadID))
+}
+
+// MaxSessionBytes returns the session size that triggers an automatic reset; 0 means never.
+func (i *Invoker) MaxSessionBytes() int64 {
+	return i.opts.MaxSessionBytes
+}
+
 // Run executes one CLI invocation for the request. Callers serialize runs per chat.
 func (i *Invoker) Run(ctx context.Context, req Request) Outcome {
 	out := i.dirs(req)
@@ -147,13 +176,28 @@ func (i *Invoker) dirs(req Request) Outcome {
 
 func (i *Invoker) execute(client cli.Client, req Request, out Outcome) (*cli.Result, error) {
 	if req.Mode != Isolated {
-		return client.Continue(i.timeHeader() + req.Prompt)
+		return i.continueOrStart(client, out.Dir, req.Prompt)
 	}
 	if ec, ok := client.(cli.EphemeralClient); ok {
 		client = ec.Ephemeral()
 	}
 	note := fmt.Sprintf("[Isolated run in %s; the chat's files are in %s]\n\n", out.Dir, out.ChatDir)
 	return client.Ask(i.timeHeader() + note + req.Prompt)
+}
+
+func (i *Invoker) continueOrStart(client cli.Client, dir, prompt string) (*cli.Result, error) {
+	marker := filepath.Join(dir, freshSessionMarker)
+	if _, err := os.Stat(marker); err != nil {
+		return client.Continue(i.timeHeader() + prompt)
+	}
+
+	result, err := client.Ask(i.timeHeader() + prompt)
+	if err == nil {
+		if rmErr := os.Remove(marker); rmErr != nil {
+			log.Printf("invoker: remove %s: %v", marker, rmErr)
+		}
+	}
+	return result, err
 }
 
 func (i *Invoker) systemPrompt(chatID int64, threadID int) string {

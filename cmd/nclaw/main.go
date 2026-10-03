@@ -96,6 +96,8 @@ func setupBot(database *gorm.DB, provider cli.Provider) (*bot.Bot, *scheduler.Sc
 		log.Fatal(err)
 	}
 	h.Bot = b
+	h.Send = newPipelineSendFunc(b)
+	registerCommands(b, h)
 
 	fileSenders := sendfile.Senders{
 		Doc:   newSendDocFunc(b),
@@ -123,6 +125,21 @@ func setupBot(database *gorm.DB, provider cli.Provider) (*bot.Bot, *scheduler.Sc
 	webhookSrv := startWebhookServer(webhookMgr)
 
 	return b, sched, webhookMgr, webhookSrv
+}
+
+func registerCommands(b *bot.Bot, h *handler.Handler) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	if me, err := b.GetMe(ctx); err != nil {
+		log.Printf("telegram: getMe: %v", err)
+	} else {
+		h.BotUsername = me.Username
+	}
+	b.RegisterHandlerMatchFunc(h.MatchCommand, h.Command)
+	if _, err := b.SetMyCommands(ctx, &bot.SetMyCommandsParams{Commands: handler.Commands}); err != nil {
+		log.Printf("telegram: setMyCommands: %v", err)
+	}
 }
 
 func invokerOptions(loc *time.Location, taskList invoker.TaskListFunc) invoker.Options {
