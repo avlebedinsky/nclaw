@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 )
@@ -43,8 +44,16 @@ type tokenRefreshResponse struct {
 	ExpiresIn    int64  `json:"expires_in"`
 }
 
+var envCredentialVars = []string{"CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"}
+
 // EnsureValidToken checks if the OAuth token is about to expire and refreshes it if needed.
+// It does nothing when credentials come from the environment, which the CLI prefers over
+// the credentials file.
 func EnsureValidToken() error {
+	if slices.ContainsFunc(envCredentialVars, func(name string) bool { return os.Getenv(name) != "" }) {
+		return nil
+	}
+
 	refreshMu.Lock()
 	defer refreshMu.Unlock()
 

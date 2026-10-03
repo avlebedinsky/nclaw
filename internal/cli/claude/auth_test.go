@@ -16,6 +16,9 @@ import (
 
 func withTestCredPath(t *testing.T, path string) {
 	t.Helper()
+	for _, name := range envCredentialVars {
+		t.Setenv(name, "")
+	}
 	orig := credPathFunc
 	credPathFunc = func() (string, error) { return path, nil }
 	t.Cleanup(func() { credPathFunc = orig })
@@ -363,4 +366,27 @@ func TestDefaultCredentialsPath_HonorsClaudeConfigDir(t *testing.T) {
 	path, err := defaultCredentialsPath()
 	require.NoError(t, err)
 	assert.Equal(t, "/custom/claude/.credentials.json", path)
+}
+
+func TestEnsureValidToken_SkipsRefreshWithEnvCredentials(t *testing.T) {
+	for _, name := range envCredentialVars {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), ".credentials.json")
+			expired := `{"claudeAiOauth":{"accessToken":"old","refreshToken":"r","expiresAt":1}}`
+			require.NoError(t, os.WriteFile(path, []byte(expired), 0o600))
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				t.Error("token endpoint must not be called")
+			}))
+			defer srv.Close()
+			withTestCredPath(t, path)
+			withTestTokenURL(t, srv.URL)
+			t.Setenv(name, "from-env")
+
+			require.NoError(t, EnsureValidToken())
+
+			data, err := os.ReadFile(path)
+			require.NoError(t, err)
+			assert.Equal(t, expired, string(data))
+		})
+	}
 }
