@@ -70,6 +70,8 @@ The system provides a list of currently scheduled tasks in your context. Use thi
 - Find task IDs for pause/resume/cancel operations
 - Avoid creating duplicate tasks
 
+The user can see and manage this chat's tasks without you: `/tasks` lists them with pause, resume and cancel buttons. Mention it when they ask how to see or stop their reminders.
+
 ## Rules
 
 1. Always confirm to the user what was scheduled in your response text.
