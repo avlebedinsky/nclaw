@@ -143,7 +143,7 @@ func TestButton_SnoozeSchedulesTheSameText(t *testing.T) {
 
 	require.Len(t, ft.snoozes, 1)
 	assert.Equal(t, snoozed{100, 7, "⏰ Позвонить стоматологу", time.Hour}, ft.snoozes[0])
-	want := "⏰ Snoozed until " + ft.at.Format("15:04")
+	want := "⏰ Snoozed until " + when(ft.at, time.Now())
 	assert.Equal(t, want, fb.waitAnswer(t))
 	assert.Equal(t, "⏰ Позвонить стоматологу\n\n"+want, fb.waitEdit(t).text)
 }
