@@ -117,6 +117,7 @@ func stopText(res chatqueue.StopResult) string {
 
 func (h *Handler) newSession(key chatqueue.Key) {
 	job := chatqueue.Job{Kind: chatqueue.KindControl, Label: "new session", Fn: func(context.Context) {
+		h.cutOff.Delete(key)
 		text := "🆕 New conversation started."
 		if err := h.Invoker.ResetSession(key.ChatID, key.ThreadID); err != nil {
 			log.Printf("handler: reset session chat=%d thread=%d: %v", key.ChatID, key.ThreadID, err)

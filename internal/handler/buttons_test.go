@@ -311,7 +311,7 @@ func TestButton_AnswerNewInterruptsAndAnswersTheNewMessage(t *testing.T) {
 	h.Button(context.Background(), nil, press(statusMessage(), "n"))
 
 	assert.Equal(t, "⏭ Answering your new messages.", fb.waitAnswer(t))
-	assert.Contains(t, <-client.started, "no, just the summary")
+	assert.Contains(t, <-client.started, interruptedNote+"no, just the summary")
 	waitQueue(t, h)
 	assert.Equal(t, []string{"done with the new request"}, sent.all())
 }
@@ -434,4 +434,33 @@ func TestButton_TaskActionFailureSaysWhyAndShowsTheCurrentList(t *testing.T) {
 	e := fb.waitEdit(t)
 	assert.Equal(t, "No scheduled tasks here.", e.text)
 	assert.Nil(t, e.kb)
+}
+
+func TestButton_StopIsMentionedToTheNextRunOnly(t *testing.T) {
+	h, client, _, fb := startLongRun(t)
+	h.Button(context.Background(), nil, press(statusMessage(), "s"))
+	fb.waitAnswer(t)
+	waitQueue(t, h)
+
+	h.Default(context.Background(), nil, chatMessage("который час?"))
+	assert.Contains(t, <-client.started, stoppedNote+"который час?")
+	waitQueue(t, h)
+	h.Default(context.Background(), nil, chatMessage("а завтра?"))
+	assert.NotContains(t, <-client.started, "stopped your previous reply")
+	waitQueue(t, h)
+}
+
+func TestNewCommand_ForgetsTheStoppedReply(t *testing.T) {
+	h, client, _, fb := startLongRun(t)
+	h.Button(context.Background(), nil, press(statusMessage(), "s"))
+	fb.waitAnswer(t)
+	waitQueue(t, h)
+
+	h.Command(context.Background(), nil, commandUpdate("/new"))
+	waitQueue(t, h)
+	h.Default(context.Background(), nil, chatMessage("привет"))
+	waitQueue(t, h)
+
+	assert.Contains(t, client.lastQuery, "привет")
+	assert.NotContains(t, client.lastQuery, "stopped your previous reply")
 }

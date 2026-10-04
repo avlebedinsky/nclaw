@@ -8,6 +8,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-telegram/bot"
@@ -41,6 +42,8 @@ type Handler struct {
 	Logins      *Logins
 	Buttons     ButtonAPI
 	Tasks       TaskManager
+
+	cutOff sync.Map
 }
 
 // MessageReactor sets the bot's reaction on a message; an empty emoji clears it.
@@ -167,7 +170,7 @@ func (h *Handler) RunBatch(ctx context.Context, key chatqueue.Key, batch []Inbou
 	defer stopTyping()
 	go sendTyping(typingCtx, h.Bot, key.ChatID, key.ThreadID)
 
-	prompt := h.composePrompt(ctx, dir, batch)
+	prompt := h.cutOffNote(key) + h.composePrompt(ctx, dir, batch)
 	log.Printf("handler: running %d message(s) for chat=%d thread=%d prompt_len=%d", len(batch), key.ChatID, key.ThreadID, len(prompt))
 
 	dest := pipeline.Dest{ChatID: key.ChatID, ThreadID: key.ThreadID, ReplyTo: batch[len(batch)-1].msgID}
@@ -176,6 +179,7 @@ func (h *Handler) RunBatch(ctx context.Context, key chatqueue.Key, batch []Inbou
 
 	if interrupted(out.Err) {
 		log.Printf("handler: run for chat=%d thread=%d interrupted: %v", key.ChatID, key.ThreadID, out.Err)
+		h.rememberCutOff(key, out.Err)
 		h.react(key, batch, "")
 		return
 	}
@@ -244,6 +248,27 @@ func withErrorText(result *cli.Result, err error) *cli.Result {
 		text := "error: " + err.Error()
 		return &cli.Result{Text: text, FullText: text}
 	}
+}
+
+const (
+	stoppedNote     = "[The user stopped your previous reply on purpose. Do not apologize for it or pick it up again unless asked.]\n\n"
+	interruptedNote = "[The user interrupted your previous reply to have the message below answered first. " +
+		"Do not apologize for it or pick it up again unless asked.]\n\n"
+)
+
+func (h *Handler) rememberCutOff(key chatqueue.Key, err error) {
+	switch {
+	case errors.Is(err, chatqueue.ErrInterrupted):
+		h.cutOff.Store(key, interruptedNote)
+	case errors.Is(err, chatqueue.ErrStopped):
+		h.cutOff.Store(key, stoppedNote)
+	}
+}
+
+func (h *Handler) cutOffNote(key chatqueue.Key) string {
+	note, _ := h.cutOff.LoadAndDelete(key)
+	s, _ := note.(string)
+	return s
 }
 
 func interrupted(err error) bool {
