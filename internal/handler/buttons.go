@@ -19,7 +19,7 @@ const staleButton = "This button no longer works."
 // ButtonAPI answers presses on inline buttons and edits the messages that carry them.
 type ButtonAPI interface {
 	Answer(ctx context.Context, queryID, text string) error
-	Edit(ctx context.Context, msg *models.Message, text string, kb buttons.Keyboard) error
+	Edit(ctx context.Context, msg *models.Message, text string, entities []models.MessageEntity, kb buttons.Keyboard) error
 }
 
 // TaskManager is the part of the scheduler that buttons and /tasks act on.
@@ -58,9 +58,26 @@ func (h *Handler) press(q *models.CallbackQuery, msg *models.Message, p buttons.
 		return stopText(h.Queue.Stop(key))
 	case buttons.AnswerNew:
 		return h.answerNew(key)
+	case buttons.TaskAction:
+		return h.taskButton(msg, key, p)
 	default:
 		return staleButton
 	}
+}
+
+var taskToasts = map[string]string{buttons.TaskPause: "⏸ Paused", buttons.TaskResume: "▶️ Resumed", buttons.TaskCancel: "🗑 Canceled"}
+
+func (h *Handler) taskButton(msg *models.Message, key chatqueue.Key, p buttons.Press) string {
+	if h.Tasks == nil {
+		return staleButton
+	}
+	toast := taskToasts[p.Action]
+	if err := h.Tasks.TaskAction(p.Action, p.TaskID, key.ChatID, key.ThreadID); err != nil {
+		toast = "Could not " + p.Action + ": " + err.Error()
+	}
+	text, kb := h.taskList(key)
+	go h.edit(msg, text, nil, kb)
+	return toast
 }
 
 func (h *Handler) answerNew(key chatqueue.Key) string {
@@ -121,13 +138,13 @@ func when(t, now time.Time) string {
 }
 
 func (h *Handler) closeButtons(msg *models.Message, note string) {
-	h.edit(msg, msg.Text+"\n\n"+note, nil)
+	h.edit(msg, msg.Text+"\n\n"+note, msg.Entities, nil)
 }
 
-func (h *Handler) edit(msg *models.Message, text string, kb buttons.Keyboard) {
+func (h *Handler) edit(msg *models.Message, text string, entities []models.MessageEntity, kb buttons.Keyboard) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := h.Buttons.Edit(ctx, msg, text, kb); err != nil {
+	if err := h.Buttons.Edit(ctx, msg, text, entities, kb); err != nil {
 		log.Printf("handler: edit message %d in chat=%d: %v", msg.ID, msg.Chat.ID, err)
 	}
 }

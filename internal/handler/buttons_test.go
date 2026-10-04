@@ -16,12 +16,14 @@ import (
 	"github.com/nickalie/nclaw/internal/buttons"
 	"github.com/nickalie/nclaw/internal/cli"
 	"github.com/nickalie/nclaw/internal/model"
+	"github.com/nickalie/nclaw/internal/pipeline"
 )
 
 type edited struct {
-	msgID int
-	text  string
-	kb    buttons.Keyboard
+	msgID    int
+	text     string
+	entities []models.MessageEntity
+	kb       buttons.Keyboard
 }
 
 type fakeButtons struct {
@@ -37,10 +39,10 @@ func (f *fakeButtons) Answer(_ context.Context, _ string, text string) error {
 	return nil
 }
 
-func (f *fakeButtons) Edit(_ context.Context, msg *models.Message, text string, kb buttons.Keyboard) error {
+func (f *fakeButtons) Edit(_ context.Context, msg *models.Message, text string, entities []models.MessageEntity, kb buttons.Keyboard) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.edits = append(f.edits, edited{msgID: msg.ID, text: text, kb: kb})
+	f.edits = append(f.edits, edited{msgID: msg.ID, text: text, entities: entities, kb: kb})
 	return nil
 }
 
@@ -76,11 +78,12 @@ type snoozed struct {
 }
 
 type fakeTasks struct {
-	snoozes []snoozed
-	at      time.Time
-	err     error
-	tasks   []model.ScheduledTask
-	actions []string
+	snoozes   []snoozed
+	at        time.Time
+	err       error
+	tasks     []model.ScheduledTask
+	actions   []string
+	actionErr error
 }
 
 func (f *fakeTasks) Snooze(chatID int64, threadID int, text string, after time.Duration) (time.Time, error) {
@@ -94,7 +97,7 @@ func (f *fakeTasks) ChatTasks(int64, int) ([]model.ScheduledTask, error) {
 
 func (f *fakeTasks) TaskAction(action, taskID string, _ int64, _ int) error {
 	f.actions = append(f.actions, action+":"+taskID)
-	return f.err
+	return f.actionErr
 }
 
 func newButtonHandler(t *testing.T) (*Handler, *fakeButtons, *fakeTasks) {
@@ -112,7 +115,10 @@ func press(msg *models.Message, data string) *models.Update {
 }
 
 func reminder() *models.Message {
-	return &models.Message{ID: 42, Text: "⏰ Позвонить стоматологу", Chat: models.Chat{ID: 100}, MessageThreadID: 7}
+	return &models.Message{
+		ID: 42, Text: "⏰ Позвонить стоматологу", Chat: models.Chat{ID: 100}, MessageThreadID: 7,
+		Entities: []models.MessageEntity{{Type: models.MessageEntityTypeBold, Offset: 3, Length: 9}},
+	}
 }
 
 func TestButton_DoneClosesTheReminder(t *testing.T) {
@@ -125,6 +131,7 @@ func TestButton_DoneClosesTheReminder(t *testing.T) {
 	e := fb.waitEdit(t)
 	assert.Equal(t, 42, e.msgID)
 	assert.Equal(t, "⏰ Позвонить стоматологу\n\n✅ Done", e.text)
+	assert.Equal(t, reminder().Entities, e.entities)
 	assert.Nil(t, e.kb)
 }
 
@@ -329,4 +336,102 @@ func TestButton_StopStopsTheRunAndDropsTheQueue(t *testing.T) {
 	assert.Contains(t, fb.waitAnswer(t), "⏹ Stopped your request after")
 	waitQueue(t, h)
 	assert.Empty(t, sent.all())
+}
+
+type sentMessage struct {
+	dest pipeline.Dest
+	text string
+}
+
+func captureSends(h *Handler) chan sentMessage {
+	sends := make(chan sentMessage, 4)
+	h.Send = func(_ context.Context, dest pipeline.Dest, text, _ string) error {
+		sends <- sentMessage{dest, text}
+		return nil
+	}
+	return sends
+}
+
+func nextSend(t *testing.T, sends chan sentMessage) sentMessage {
+	t.Helper()
+	select {
+	case m := <-sends:
+		return m
+	case <-time.After(5 * time.Second):
+		t.Fatal("nothing was sent")
+		return sentMessage{}
+	}
+}
+
+func TestTasksCommand_ListsTheTasksWithButtons(t *testing.T) {
+	h, _, ft := newButtonHandler(t)
+	sends := captureSends(h)
+	next := time.Date(2026, 10, 5, 9, 0, 0, 0, time.UTC)
+	ft.tasks = []model.ScheduledTask{
+		{ID: "t1", Prompt: "Утренняя\nсводка", ScheduleType: model.ScheduleCron, ScheduleValue: "0 9 * * *", Status: model.StatusActive, NextRun: &next},
+		{ID: "t2", Prompt: "Проверить почту", ScheduleType: model.ScheduleInterval, ScheduleValue: "2h", Status: model.StatusActive},
+		{ID: "t3", Prompt: "⏰ Полить цветы", ScheduleType: model.ScheduleOnce, ScheduleValue: "2026-10-05T09:00:00", Status: model.StatusPaused, NextRun: &next},
+	}
+	require.True(t, h.MatchCommand(commandUpdate("/tasks")))
+
+	h.Command(context.Background(), nil, commandUpdate("/tasks"))
+
+	m := nextSend(t, sends)
+	assert.Equal(t, "Scheduled tasks here:\n"+
+		"1. Утренняя сводка — cron 0 9 * * *, next Mon 5 Oct 09:00\n"+
+		"2. Проверить почту — every 2h\n"+
+		"3. ⏰ Полить цветы — once at Mon 5 Oct 09:00, paused", m.text)
+	assert.Equal(t, buttons.Keyboard{buttons.Task(1, "t1", false), buttons.Task(2, "t2", false), buttons.Task(3, "t3", true)}, m.dest.Buttons)
+	assert.Equal(t, int64(100), m.dest.ChatID)
+}
+
+func TestTasksCommand_NoTasks(t *testing.T) {
+	h, _, _ := newButtonHandler(t)
+	sends := captureSends(h)
+
+	h.Command(context.Background(), nil, commandUpdate("/tasks"))
+
+	m := nextSend(t, sends)
+	assert.Equal(t, "No scheduled tasks here.", m.text)
+	assert.Nil(t, m.dest.Buttons)
+}
+
+func TestTasksCommand_UnavailableWithoutScheduler(t *testing.T) {
+	h := newTestHandler(t, &mockProvider{client: &mockClient{}}, nil)
+
+	assert.False(t, h.MatchCommand(commandUpdate("/tasks")))
+}
+
+func taskList() *models.Message {
+	return &models.Message{
+		ID: 5, Text: "Scheduled tasks here:\n1. https://example.com", Chat: models.Chat{ID: 100},
+		Entities: []models.MessageEntity{{Type: models.MessageEntityTypeURL, Offset: 25, Length: 19}},
+	}
+}
+
+func TestButton_TaskActionAppliesAndRedrawsTheList(t *testing.T) {
+	h, fb, ft := newButtonHandler(t)
+	ft.tasks = []model.ScheduledTask{{ID: "t1", Prompt: "Полить цветы", ScheduleType: model.ScheduleInterval, ScheduleValue: "24h", Status: model.StatusPaused}}
+
+	h.Button(context.Background(), nil, press(taskList(), "t:p:t1"))
+
+	assert.Equal(t, "⏸ Paused", fb.waitAnswer(t))
+	assert.Equal(t, []string{"pause:t1"}, ft.actions)
+	e := fb.waitEdit(t)
+	assert.Equal(t, 5, e.msgID)
+	assert.Equal(t, "Scheduled tasks here:\n1. Полить цветы — every 24h, paused", e.text)
+	assert.Nil(t, e.entities)
+	assert.Equal(t, buttons.Keyboard{buttons.Task(1, "t1", true)}, e.kb)
+}
+
+func TestButton_TaskActionFailureSaysWhyAndShowsTheCurrentList(t *testing.T) {
+	h, fb, ft := newButtonHandler(t)
+	ft.actionErr = errors.New("task not found: t9")
+
+	h.Button(context.Background(), nil, press(taskList(), "t:c:t9"))
+
+	assert.Equal(t, "Could not cancel: task not found: t9", fb.waitAnswer(t))
+	e := fb.waitEdit(t)
+	assert.Equal(t, "No scheduled tasks here.", e.text)
+	assert.Nil(t, e.kb)
 }

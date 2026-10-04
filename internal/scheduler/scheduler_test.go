@@ -1191,3 +1191,26 @@ func TestChatTasks_OnlyLiveTasksOfThatThread(t *testing.T) {
 	}
 	assert.ElementsMatch(t, []string{active.ID, paused.ID}, ids)
 }
+
+func TestChatTasks_NextRunFromTheLiveScheduleInTheSchedulersZone(t *testing.T) {
+	database, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	require.NoError(t, err)
+	require.NoError(t, database.AutoMigrate(&model.ScheduledTask{}, &model.TaskRunLog{}))
+	msk := time.FixedZone("MSK", 3*60*60)
+	s, err := New(database, invoker.New(&mockProvider{}, invoker.Options{DataDir: t.TempDir()}), inlineRunner{}, msk)
+	require.NoError(t, err)
+	s.Start()
+	defer s.Shutdown()
+	require.NoError(t, s.CreateTask(&model.ScheduledTask{
+		ID: model.GenerateTaskID(), ChatID: 100, Prompt: "check the news",
+		ScheduleType: model.ScheduleInterval, ScheduleValue: "1h", Status: model.StatusActive, CreatedAt: time.Now(),
+	}))
+
+	tasks, err := s.ChatTasks(100, 0)
+
+	require.NoError(t, err)
+	require.Len(t, tasks, 1)
+	require.NotNil(t, tasks[0].NextRun)
+	assert.Equal(t, msk, tasks[0].NextRun.Location())
+	assert.WithinDuration(t, time.Now().Add(time.Hour), *tasks[0].NextRun, time.Minute)
+}

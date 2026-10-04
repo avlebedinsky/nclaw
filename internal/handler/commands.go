@@ -12,7 +12,9 @@ import (
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
 
+	"github.com/nickalie/nclaw/internal/buttons"
 	"github.com/nickalie/nclaw/internal/chatqueue"
+	"github.com/nickalie/nclaw/internal/model"
 	"github.com/nickalie/nclaw/internal/pipeline"
 )
 
@@ -23,6 +25,7 @@ var Commands = []models.BotCommand{
 	{Command: "stop", Description: "Stop the current run and drop queued messages"},
 	{Command: "new", Description: "Start a new conversation"},
 	{Command: "status", Description: "Show what the bot is doing in this chat"},
+	{Command: "tasks", Description: "List and manage this chat's scheduled tasks"},
 }
 
 // LoginCommand is offered only in the admin chat, where /login works.
@@ -75,6 +78,11 @@ func (h *Handler) commandFunc(name string) func(chatqueue.Key) {
 		return h.newSession
 	case "status":
 		return h.status
+	case "tasks":
+		if h.Tasks == nil {
+			return nil
+		}
+		return h.tasks
 	case "login":
 		if h.Logins == nil {
 			return nil
@@ -217,9 +225,64 @@ func (h *Handler) notify(key chatqueue.Key, text string) {
 }
 
 func (h *Handler) notifyWithin(key chatqueue.Key, text string, timeout time.Duration) {
+	h.sendWithin(key, text, nil, timeout)
+}
+
+func (h *Handler) sendWithin(key chatqueue.Key, text string, kb buttons.Keyboard, timeout time.Duration) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	if err := h.Send(ctx, pipeline.Dest{ChatID: key.ChatID, ThreadID: key.ThreadID}, text, ""); err != nil {
+	dest := pipeline.Dest{ChatID: key.ChatID, ThreadID: key.ThreadID, Buttons: kb}
+	if err := h.Send(ctx, dest, text, ""); err != nil {
 		log.Printf("handler: notify chat=%d thread=%d: %v", key.ChatID, key.ThreadID, err)
 	}
+}
+
+func (h *Handler) tasks(key chatqueue.Key) {
+	go func() {
+		text, kb := h.taskList(key)
+		h.sendWithin(key, text, kb, 15*time.Second)
+	}()
+}
+
+func (h *Handler) taskList(key chatqueue.Key) (string, buttons.Keyboard) {
+	tasks, err := h.Tasks.ChatTasks(key.ChatID, key.ThreadID)
+	if err != nil {
+		return "Could not list tasks: " + err.Error(), nil
+	}
+	if len(tasks) == 0 {
+		return "No scheduled tasks here.", nil
+	}
+	lines := []string{"Scheduled tasks here:"}
+	kb := make(buttons.Keyboard, 0, len(tasks))
+	for i := range tasks {
+		t := &tasks[i]
+		prompt := strings.Join(strings.Fields(t.Prompt), " ")
+		lines = append(lines, fmt.Sprintf("%d. %s — %s", i+1, shorten(prompt, 60), scheduleText(t)))
+		kb = append(kb, buttons.Task(i+1, t.ID, t.Status == model.StatusPaused))
+	}
+	return strings.Join(lines, "\n"), kb
+}
+
+func scheduleText(t *model.ScheduledTask) string {
+	var next string
+	if t.NextRun != nil {
+		next = t.NextRun.Format("Mon 2 Jan 15:04")
+	}
+	var s string
+	switch t.ScheduleType {
+	case model.ScheduleOnce:
+		s = "once at " + next
+		next = ""
+	case model.ScheduleCron:
+		s = "cron " + t.ScheduleValue
+	default:
+		s = "every " + t.ScheduleValue
+	}
+	if t.Status == model.StatusPaused {
+		return s + ", paused"
+	}
+	if next != "" {
+		s += ", next " + next
+	}
+	return s
 }

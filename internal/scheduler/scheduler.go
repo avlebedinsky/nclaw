@@ -501,9 +501,24 @@ func (s *Scheduler) Snooze(chatID int64, threadID int, text string, after time.D
 	})
 }
 
-// ChatTasks returns the active and paused tasks of a chat/thread.
+// ChatTasks returns the active and paused tasks of a chat/thread, with the next run taken
+// from the live schedule where there is one, in the scheduler's time zone.
 func (s *Scheduler) ChatTasks(chatID int64, threadID int) ([]model.ScheduledTask, error) {
-	return liveTasks(s.db, chatID, threadID)
+	tasks, err := liveTasks(s.db, chatID, threadID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range tasks {
+		next := s.resolveNextRun(&tasks[i])
+		if next == nil {
+			next = tasks[i].NextRun
+		}
+		if next != nil {
+			at := next.In(s.loc)
+			tasks[i].NextRun = &at
+		}
+	}
+	return tasks, nil
 }
 
 func liveTasks(database *gorm.DB, chatID int64, threadID int) ([]model.ScheduledTask, error) {

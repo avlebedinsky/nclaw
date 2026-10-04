@@ -491,12 +491,12 @@ func (a buttonAPI) Answer(ctx context.Context, queryID, text string) error {
 	return err
 }
 
-func (a buttonAPI) Edit(ctx context.Context, msg *models.Message, text string, kb buttons.Keyboard) error {
+func (a buttonAPI) Edit(ctx context.Context, msg *models.Message, text string, entities []models.MessageEntity, kb buttons.Keyboard) error {
 	_, err := a.b.EditMessageText(ctx, &bot.EditMessageTextParams{
 		ChatID:      msg.Chat.ID,
 		MessageID:   msg.ID,
 		Text:        text,
-		Entities:    msg.Entities,
+		Entities:    entities,
 		ReplyMarkup: buttons.Markup(kb),
 	})
 	return err
