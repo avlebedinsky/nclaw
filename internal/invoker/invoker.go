@@ -200,8 +200,12 @@ func (i *Invoker) continueOrStart(client cli.Client, dir, prompt string) (*cli.R
 	return result, err
 }
 
+const runRule = "Each message starts a separate run that ends when you reply. Anything still running in the background " +
+	"is stopped then, and you cannot message the user afterwards on your own, so never promise to report back later. " +
+	"Wait for commands to finish before replying; for something that has to happen at a later time, create a scheduled task."
+
 func (i *Invoker) systemPrompt(chatID int64, threadID int) string {
-	parts := []string{telegram.Prompt, i.chatContext(chatID, threadID), i.timezoneLine()}
+	parts := []string{telegram.Prompt, runRule, i.chatContext(chatID, threadID), i.timezoneLine()}
 	if i.opts.TaskList != nil {
 		parts = append(parts, i.opts.TaskList(chatID, threadID))
 	}

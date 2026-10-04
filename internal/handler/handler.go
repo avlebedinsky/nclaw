@@ -81,6 +81,14 @@ type Transcriber interface {
 	Transcribe(ctx context.Context, path string) (string, error)
 }
 
+// Updates lists the update types nclaw handles. Telegram keeps the list a bot last asked
+// for, so it is sent with every poll instead of trusting whatever was set before.
+var Updates = bot.AllowedUpdates{
+	models.AllowedUpdateMessage,
+	models.AllowedUpdateCallbackQuery,
+	models.AllowedUpdateStoppedMessageGeneration,
+}
+
 // AllowChat is bot middleware that drops updates nclaw does not handle and updates
 // from chats outside the whitelist.
 func AllowChat(next bot.HandlerFunc) bot.HandlerFunc {
