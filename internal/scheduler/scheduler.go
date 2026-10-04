@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
+	"github.com/nickalie/nclaw/internal/buttons"
 	"github.com/nickalie/nclaw/internal/chatqueue"
 	"github.com/nickalie/nclaw/internal/cli"
 	"github.com/nickalie/nclaw/internal/db"
@@ -117,7 +118,7 @@ func (s *Scheduler) disableUnloadable(task *model.ScheduledTask, err error) {
 		return
 	}
 	text := fmt.Sprintf("⚠️ A scheduled task could not be scheduled and was disabled: %s\n%v", truncate(task.Prompt, 80), err)
-	s.deliver(task, &cli.Result{Text: text}, nil, "")
+	s.deliver(pipeline.Dest{ChatID: task.ChatID, ThreadID: task.ThreadID}, &cli.Result{Text: text}, nil, "")
 }
 
 // CreateTask persists a task and registers it with gocron.
@@ -465,17 +466,69 @@ func (s *Scheduler) sendResult(task *model.ScheduledTask, result *cli.Result, ru
 		return
 	}
 
-	if runErr != nil {
+	dest := pipeline.Dest{ChatID: task.ChatID, ThreadID: task.ThreadID}
+	switch {
+	case runErr != nil:
 		result = failureResult(task, result, runErr)
+	case task.ContextMode == model.ContextNotify:
+		dest.Buttons = buttons.Reminder()
 	}
-	s.deliver(task, result, runErr, dir)
+	s.deliver(dest, result, runErr, dir)
 }
 
-func (s *Scheduler) deliver(task *model.ScheduledTask, result *cli.Result, runErr error, dir string) {
+func (s *Scheduler) deliver(dest pipeline.Dest, result *cli.Result, runErr error, dir string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	s.pipeline.Process(ctx, result, runErr, pipeline.Dest{ChatID: task.ChatID, ThreadID: task.ThreadID}, dir, false)
+	s.pipeline.Process(ctx, result, runErr, dest, dir, false)
+}
+
+// Snooze schedules text as a one-time reminder in a chat/thread after the given delay
+// and returns when it will fire.
+func (s *Scheduler) Snooze(chatID int64, threadID int, text string, after time.Duration) (time.Time, error) {
+	at := time.Now().In(s.loc).Add(after).Truncate(time.Second)
+	return at, s.CreateTask(&model.ScheduledTask{
+		ID:            model.GenerateTaskID(),
+		ChatID:        chatID,
+		ThreadID:      threadID,
+		Prompt:        text,
+		ScheduleType:  model.ScheduleOnce,
+		ScheduleValue: at.Format("2006-01-02T15:04:05"),
+		ContextMode:   model.ContextNotify,
+		Status:        model.StatusActive,
+		NextRun:       &at,
+		CreatedAt:     time.Now(),
+	})
+}
+
+// ChatTasks returns the active and paused tasks of a chat/thread, with the next run taken
+// from the live schedule where there is one, in the scheduler's time zone.
+func (s *Scheduler) ChatTasks(chatID int64, threadID int) ([]model.ScheduledTask, error) {
+	tasks, err := liveTasks(s.db, chatID, threadID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range tasks {
+		next := s.resolveNextRun(&tasks[i])
+		if next == nil {
+			next = tasks[i].NextRun
+		}
+		if next != nil {
+			at := next.In(s.loc)
+			tasks[i].NextRun = &at
+		}
+	}
+	return tasks, nil
+}
+
+func liveTasks(database *gorm.DB, chatID int64, threadID int) ([]model.ScheduledTask, error) {
+	tasks, err := db.ListTasksByChat(database, chatID, threadID)
+	if err != nil {
+		return nil, err
+	}
+	return slices.DeleteFunc(tasks, func(t model.ScheduledTask) bool {
+		return t.Status != model.StatusActive && t.Status != model.StatusPaused
+	}), nil
 }
 
 func failureResult(task *model.ScheduledTask, result *cli.Result, runErr error) *cli.Result {
@@ -504,14 +557,11 @@ func (s *Scheduler) getNextRun(jobID uuid.UUID) *time.Time {
 // FormatTaskList returns a system prompt section listing the tasks of a chat/thread,
 // with next run times shown in loc.
 func FormatTaskList(database *gorm.DB, loc *time.Location, chatID int64, threadID int) string {
-	tasks, err := db.ListTasksByChat(database, chatID, threadID)
+	tasks, err := liveTasks(database, chatID, threadID)
 	if err != nil {
 		log.Printf("scheduler: list tasks: %v", err)
 		return "Current scheduled tasks: none"
 	}
-	tasks = slices.DeleteFunc(tasks, func(t model.ScheduledTask) bool {
-		return t.Status != model.StatusActive && t.Status != model.StatusPaused
-	})
 	if len(tasks) == 0 {
 		return "Current scheduled tasks: none"
 	}

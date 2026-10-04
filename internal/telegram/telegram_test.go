@@ -55,3 +55,8 @@ func TestChatDir_NegativeChatID(t *testing.T) {
 	dir := ChatDir("/data", -100123, 0)
 	assert.Equal(t, "/data/-100123", dir)
 }
+
+func TestPromptExplainsButtons(t *testing.T) {
+	assert.Contains(t, Prompt, "Format all responses using Telegram HTML")
+	assert.Contains(t, Prompt, "```nclaw:buttons\n[\"Yes, delete\", \"No\"]\n```")
+}

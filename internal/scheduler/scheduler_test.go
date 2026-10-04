@@ -14,6 +14,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
+	"github.com/nickalie/nclaw/internal/buttons"
 	"github.com/nickalie/nclaw/internal/chatqueue"
 	"github.com/nickalie/nclaw/internal/cli"
 	"github.com/nickalie/nclaw/internal/db"
@@ -1114,4 +1115,102 @@ func TestLoadTasks_DisablesUnloadableTaskAndTellsChat(t *testing.T) {
 	require.Len(t, *sent, 1)
 	assert.Contains(t, (*sent)[0], "could not be scheduled and was disabled: remind about water")
 	assert.Contains(t, (*sent)[0], `unknown schedule type "weekly"`)
+}
+
+func captureDests(s *Scheduler) *[]pipeline.Dest {
+	var dests []pipeline.Dest
+	s.SetPipeline(pipeline.New(func(_ context.Context, dest pipeline.Dest, _, _ string) error {
+		dests = append(dests, dest)
+		return nil
+	}, sendfile.Senders{}, false))
+	return &dests
+}
+
+func TestExecuteTask_NotifyCarriesReminderButtons(t *testing.T) {
+	s, _, _, _ := setupRecordingScheduler(t)
+	dests := captureDests(s)
+	task := createRunnableTask(t, s, model.ContextNotify)
+
+	s.executeTask(task.ID)
+
+	require.Len(t, *dests, 1)
+	assert.Equal(t, buttons.Reminder(), (*dests)[0].Buttons)
+}
+
+func TestExecuteTask_AgentRunsAndFailuresHaveNoReminderButtons(t *testing.T) {
+	s, provider, _, _ := setupRecordingScheduler(t)
+	dests := captureDests(s)
+	ok := createRunnableTask(t, s, model.ContextGroup)
+	s.executeTask(ok.ID)
+
+	provider.client.err = errors.New("boom")
+	failing := createRunnableTask(t, s, model.ContextNotify)
+	require.NoError(t, s.db.Model(failing).Update("context_mode", model.ContextGroup).Error)
+	s.executeTask(failing.ID)
+
+	require.Len(t, *dests, 2)
+	assert.Nil(t, (*dests)[0].Buttons)
+	assert.Nil(t, (*dests)[1].Buttons)
+}
+
+func TestSnooze_SchedulesOneTimeNotify(t *testing.T) {
+	s, _, _, _ := setupRecordingScheduler(t)
+	s.Start()
+	defer s.Shutdown()
+
+	before := time.Now()
+	at, err := s.Snooze(100, 7, "⏰ Позвонить стоматологу", 15*time.Minute)
+	require.NoError(t, err)
+
+	assert.WithinDuration(t, before.Add(15*time.Minute), at, 2*time.Second)
+	tasks, err := s.ChatTasks(100, 7)
+	require.NoError(t, err)
+	require.Len(t, tasks, 1)
+	assert.Equal(t, "⏰ Позвонить стоматологу", tasks[0].Prompt)
+	assert.Equal(t, model.ContextNotify, tasks[0].ContextMode)
+	assert.Equal(t, model.ScheduleOnce, tasks[0].ScheduleType)
+	assert.Equal(t, at.Format("2006-01-02T15:04:05"), tasks[0].ScheduleValue)
+}
+
+func TestChatTasks_OnlyLiveTasksOfThatThread(t *testing.T) {
+	s, _, _, _ := setupRecordingScheduler(t)
+	active := createRunnableTask(t, s, model.ContextNotify)
+	paused := createRunnableTask(t, s, model.ContextNotify)
+	require.NoError(t, s.db.Model(paused).Update("status", model.StatusPaused).Error)
+	done := createRunnableTask(t, s, model.ContextNotify)
+	require.NoError(t, s.db.Model(done).Update("status", model.StatusCompleted).Error)
+	other := createRunnableTask(t, s, model.ContextNotify)
+	require.NoError(t, s.db.Model(other).Update("thread_id", 8).Error)
+
+	tasks, err := s.ChatTasks(100, 7)
+
+	require.NoError(t, err)
+	ids := make([]string, 0, len(tasks))
+	for i := range tasks {
+		ids = append(ids, tasks[i].ID)
+	}
+	assert.ElementsMatch(t, []string{active.ID, paused.ID}, ids)
+}
+
+func TestChatTasks_NextRunFromTheLiveScheduleInTheSchedulersZone(t *testing.T) {
+	database, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	require.NoError(t, err)
+	require.NoError(t, database.AutoMigrate(&model.ScheduledTask{}, &model.TaskRunLog{}))
+	msk := time.FixedZone("MSK", 3*60*60)
+	s, err := New(database, invoker.New(&mockProvider{}, invoker.Options{DataDir: t.TempDir()}), inlineRunner{}, msk)
+	require.NoError(t, err)
+	s.Start()
+	defer s.Shutdown()
+	require.NoError(t, s.CreateTask(&model.ScheduledTask{
+		ID: model.GenerateTaskID(), ChatID: 100, Prompt: "check the news",
+		ScheduleType: model.ScheduleInterval, ScheduleValue: "1h", Status: model.StatusActive, CreatedAt: time.Now(),
+	}))
+
+	tasks, err := s.ChatTasks(100, 0)
+
+	require.NoError(t, err)
+	require.Len(t, tasks, 1)
+	require.NotNil(t, tasks[0].NextRun)
+	assert.Equal(t, msk, tasks[0].NextRun.Location())
+	assert.WithinDuration(t, time.Now().Add(time.Hour), *tasks[0].NextRun, time.Minute)
 }

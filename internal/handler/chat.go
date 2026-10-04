@@ -53,10 +53,21 @@ func senderName(msg *models.Message) string {
 	case telegram.IsPrivateChat(msg.Chat.ID):
 		return ""
 	case msg.From != nil:
-		return strings.TrimSpace(msg.From.FirstName + " " + msg.From.LastName)
+		return personName(msg.From)
 	case msg.SenderChat != nil:
 		return msg.SenderChat.Title
 	default:
 		return ""
 	}
+}
+
+func pressedBy(msg *models.Message, u *models.User) string {
+	if telegram.IsPrivateChat(msg.Chat.ID) {
+		return ""
+	}
+	return personName(u)
+}
+
+func personName(u *models.User) string {
+	return strings.TrimSpace(u.FirstName + " " + u.LastName)
 }

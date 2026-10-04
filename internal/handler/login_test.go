@@ -11,7 +11,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/nickalie/nclaw/internal/chatqueue"
 	"github.com/nickalie/nclaw/internal/cli"
 )
 
@@ -90,7 +89,7 @@ func TestLogin_SubmitsNextMessageAsCode(t *testing.T) {
 	msgs = waitSent(t, sent, 2)
 	assert.Equal(t, "✅ Signed in.\nClaude sign-in: valid until Sun 1 Nov 18:00 MSK (29 days left).", msgs[1])
 	assert.Equal(t, []string{"abc#def"}, lp.session.submitted())
-	assert.Equal(t, 0, h.Queue.Snapshot(chatKey(100)).PendingUser)
+	assert.Equal(t, 0, h.Queue.Snapshot(testKey).PendingUser)
 	require.Eventually(t, func() bool { return lp.ctx.Err() != nil }, time.Second, 10*time.Millisecond)
 
 	h.Default(context.Background(), nil, chatMessage("hello again"))
@@ -130,7 +129,7 @@ func TestLogin_StartFailure(t *testing.T) {
 	msgs := waitSent(t, sent, 1)
 	assert.Equal(t, "Could not start the sign-in: claude: login printed no link in time", msgs[0])
 	h.Default(context.Background(), nil, chatMessage("abc#def"))
-	assert.Equal(t, 1, h.Queue.Snapshot(chatKey(100)).PendingUser)
+	assert.Equal(t, 1, h.Queue.Snapshot(testKey).PendingUser)
 }
 
 func TestLogin_ExpiresAfterWindow(t *testing.T) {
@@ -163,8 +162,4 @@ func TestLogin_DisabledWithoutLogins(t *testing.T) {
 	h := newTestHandler(t, &mockProvider{client: &mockClient{}}, nil)
 
 	assert.False(t, h.MatchCommand(commandUpdate("/login")))
-}
-
-func chatKey(chatID int64) chatqueue.Key {
-	return chatqueue.Key{ChatID: chatID}
 }

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/nickalie/nclaw/internal/blocks"
+	"github.com/nickalie/nclaw/internal/buttons"
 	"github.com/nickalie/nclaw/internal/cli"
 	"github.com/nickalie/nclaw/internal/sendfile"
 	"github.com/nickalie/nclaw/internal/telegram"
@@ -18,12 +19,13 @@ type BlockExecutor interface {
 	ExecuteBlocks(text string, chatID int64, threadID int) string
 }
 
-// Dest addresses a message: the chat, its forum thread and, when non-zero, the
-// message being answered.
+// Dest addresses a message: the chat, its forum thread, when non-zero the message
+// being answered, and the buttons to put under the last message sent.
 type Dest struct {
 	ChatID   int64
 	ThreadID int
 	ReplyTo  int
+	Buttons  buttons.Keyboard
 }
 
 // SendFunc sends a text message to a destination with an optional parse mode.
@@ -122,9 +124,11 @@ func (p *Pipeline) AttachStream(ctx context.Context, client cli.Client, dest Des
 
 	st := &StreamState{}
 	sc.OnMessage(func(msg string) {
-		if text := blocks.StripAll(msg); text != "" {
+		if r := toReply(msg); r.text != "" {
 			st.sent++
-			p.sendReply(ctx, dest, text)
+			d := dest
+			d.Buttons = r.kb
+			p.sendReply(ctx, d, r.text)
 		}
 	})
 	return st
@@ -151,20 +155,40 @@ func (p *Pipeline) Process(
 
 	// Phase 2: Strip all command block syntax from each display message.
 	// When already streamed live, skip re-sending the display messages.
-	var texts []string
+	var replies []reply
 	if !streamed {
-		texts = p.displayTexts(result)
+		replies = p.displayReplies(result)
 	}
 
 	// Phase 3: Append status messages from block execution to the last message.
-	texts = appendStatusToLast(texts, statusMsgs)
+	replies = appendStatusToLast(replies, statusMsgs)
 
 	// Phase 4: Send each reply.
-	for _, text := range texts {
-		if text != "" {
-			p.sendReply(ctx, dest, text)
-			dest.ReplyTo = 0
+	p.sendReplies(ctx, dest, replies)
+}
+
+type reply struct {
+	text string
+	kb   buttons.Keyboard
+}
+
+func toReply(raw string) reply {
+	r := reply{text: blocks.StripAll(raw)}
+	if labels := blocks.ButtonLabels(raw); len(labels) > 0 {
+		r.kb = buttons.Choices(labels)
+	}
+	return r
+}
+
+func (p *Pipeline) sendReplies(ctx context.Context, dest Dest, replies []reply) {
+	kb := dest.Buttons
+	for i, r := range replies {
+		dest.Buttons = r.kb
+		if kb != nil && i == len(replies)-1 {
+			dest.Buttons = kb
 		}
+		p.sendReply(ctx, dest, r.text)
+		dest.ReplyTo = 0
 	}
 }
 
@@ -199,24 +223,24 @@ func (p *Pipeline) hintFor(result *cli.Result, cliErr error) string {
 	return p.failureHint(result.Text)
 }
 
-// displayTexts returns the stripped, non-empty messages to send. When stream
-// messages are enabled and the result carries individual messages, each is sent
-// separately; otherwise only the final Text is sent.
-func (p *Pipeline) displayTexts(result *cli.Result) []string {
+// displayReplies returns the stripped, non-empty messages to send with the buttons
+// their blocks ask for. When stream messages are enabled and the result carries
+// individual messages, each is sent separately; otherwise only the final Text is sent.
+func (p *Pipeline) displayReplies(result *cli.Result) []reply {
 	if p.streamMessages && len(result.Messages) > 0 {
-		var texts []string
+		var replies []reply
 		for _, m := range result.Messages {
-			if s := blocks.StripAll(m); s != "" {
-				texts = append(texts, s)
+			if r := toReply(m); r.text != "" {
+				replies = append(replies, r)
 			}
 		}
-		if len(texts) > 0 {
-			return texts
+		if len(replies) > 0 {
+			return replies
 		}
 	}
 
-	if s := blocks.StripAll(result.Text); s != "" {
-		return []string{s}
+	if r := toReply(result.Text); r.text != "" {
+		return []reply{r}
 	}
 	return nil
 }
@@ -232,7 +256,7 @@ func appendStatus(text string, msgs []string) string {
 
 // appendStatusToLast appends status messages to the last display message. When
 // there are no display messages, the status becomes a standalone message.
-func appendStatusToLast(texts, msgs []string) []string {
+func appendStatusToLast(replies []reply, msgs []string) []reply {
 	hasStatus := false
 	for _, msg := range msgs {
 		if msg != "" {
@@ -241,16 +265,16 @@ func appendStatusToLast(texts, msgs []string) []string {
 		}
 	}
 	if !hasStatus {
-		return texts
+		return replies
 	}
 
-	if len(texts) == 0 {
-		return []string{appendStatus("", msgs)}
+	if len(replies) == 0 {
+		return []reply{{text: appendStatus("", msgs)}}
 	}
 
-	last := len(texts) - 1
-	texts[last] = appendStatus(texts[last], msgs)
-	return texts
+	last := len(replies) - 1
+	replies[last].text = appendStatus(replies[last].text, msgs)
+	return replies
 }
 
 func (p *Pipeline) sendReply(ctx context.Context, dest Dest, text string) {
@@ -265,13 +289,18 @@ func (p *Pipeline) sendReply(ctx context.Context, dest Dest, text string) {
 	file := []byte(telegram.Markdown(text))
 	if err := p.senders.Doc(ctx, dest.ChatID, dest.ThreadID, "answer.md", file, longAnswerCaption); err != nil {
 		log.Printf("pipeline: send long answer as file: %v", err)
-		dest.ReplyTo = 0
+		dest.ReplyTo, dest.Buttons = 0, nil
 		p.sendChunks(ctx, dest, chunks[1:])
 	}
 }
 
 func (p *Pipeline) sendChunks(ctx context.Context, dest Dest, chunks []string) {
-	for _, chunk := range chunks {
+	kb := dest.Buttons
+	for i, chunk := range chunks {
+		dest.Buttons = nil
+		if i == len(chunks)-1 {
+			dest.Buttons = kb
+		}
 		p.sendChunk(ctx, dest, chunk)
 		dest.ReplyTo = 0
 	}

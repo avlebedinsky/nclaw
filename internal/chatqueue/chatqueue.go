@@ -32,6 +32,7 @@ const (
 // Errors reported by the queue.
 var (
 	ErrStopped      = errors.New("stopped by user")
+	ErrInterrupted  = errors.New("interrupted to answer newer messages")
 	ErrShuttingDown = errors.New("shutting down")
 	ErrDropped      = errors.New("dropped from queue")
 )
@@ -195,6 +196,21 @@ func (q *Queue[M]) Stop(key Key) StopResult {
 	}
 	poke(ln)
 	return res
+}
+
+// Interrupt cancels the running batch of user messages with ErrInterrupted and keeps
+// what is waiting in the lane, so the next batch starts once it ends. It reports whether
+// a user batch was running.
+func (q *Queue[M]) Interrupt(key Key) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	ln := q.lanes[key]
+	if ln == nil || ln.current == nil || ln.current.kind != KindUser {
+		return false
+	}
+	ln.current.cancel(ErrInterrupted)
+	return true
 }
 
 // Snapshot reports what the lane is doing.

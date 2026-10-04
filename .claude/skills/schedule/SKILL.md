@@ -32,7 +32,7 @@ Fields:
 - `context`: `"group"` (default), `"isolated"` or `"notify"` (optional)
 
 Context modes:
-- `"notify"`: No AI run at all — when the task fires, the `prompt` text is sent to the chat as is, instantly, even while you are busy with another request. Use it for plain reminders whose text is already known ("remind me to…", "wake me at…"). Write the prompt as the final message in the user's language, e.g. `"⏰ Call the dentist"`.
+- `"notify"`: No AI run at all — when the task fires, the `prompt` text is sent to the chat as is, instantly, even while you are busy with another request. Use it for plain reminders whose text is already known ("remind me to…", "wake me at…"). Write the prompt as the final message in the user's language, e.g. `"⏰ Call the dentist"`. The reminder arrives with Done, +15 min, +1 h and Tomorrow buttons: the user can snooze it with one tap, so don't add your own snooze instructions.
 - `"group"`: Task runs in the conversation's session (has chat history). Use for tasks needing context.
 - `"isolated"`: Task runs in a fresh session. Use for self-contained tasks. Include all needed context in the prompt.
 
@@ -69,6 +69,8 @@ The system provides a list of currently scheduled tasks in your context. Use thi
 - Answer questions about existing schedules
 - Find task IDs for pause/resume/cancel operations
 - Avoid creating duplicate tasks
+
+The user can see and manage this chat's tasks without you: `/tasks` lists them with pause, resume and cancel buttons. Mention it when they ask how to see or stop their reminders.
 
 ## Rules
 

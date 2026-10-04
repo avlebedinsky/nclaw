@@ -5,8 +5,17 @@ import (
 	"path/filepath"
 )
 
-// Prompt is the system prompt for formatting output as Telegram HTML.
-const Prompt = `IMPORTANT: Your output will be displayed in Telegram.
+// Prompt is the system prompt for formatting output as Telegram HTML and offering answers as buttons.
+const Prompt = formattingPrompt + "\n\n" + buttonsPrompt
+
+const buttonsPrompt = "When the user's next step is a short closed choice (yes or no, one of a few options), " +
+	"end your reply with a block like\n" +
+	"```nclaw:buttons\n[\"Yes, delete\", \"No\"]\n```\n" +
+	"The options appear as buttons under your message: at most 6, short labels in the user's language. " +
+	"The label of the pressed button comes back as the user's next message. The block itself is not shown. " +
+	"Use buttons only when a tap is easier than typing; never for open questions."
+
+const formattingPrompt = `IMPORTANT: Your output will be displayed in Telegram.
 Format all responses using Telegram HTML. Supported tags:
 <b>bold</b>, <i>italic</i>, <u>underline</u>, <s>strikethrough</s>,
 <code>inline code</code>, <pre>code block</pre>, <pre><code class="language-go">code with language</code></pre>,
