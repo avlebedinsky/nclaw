@@ -76,12 +76,7 @@ jobs:
     strategy:
       matrix:
         variant:
-          - { name: "", suffix: "", target: "all" }
           - { name: "Claude", suffix: "-claude", target: "claude" }
-          - { name: "Codex", suffix: "-codex", target: "codex" }
-          - { name: "Copilot", suffix: "-copilot", target: "copilot" }
-          - { name: "Multi-Model", suffix: "-multi-model", target: "multi-model" }
-          - { name: "Gemini", suffix: "-gemini", target: "gemini" }
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -134,7 +129,7 @@ jobs:
           context: .
           file: docker/Dockerfile
           target: ${{ matrix.variant.target }}
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

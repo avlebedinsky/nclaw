@@ -210,7 +210,7 @@ GitHub Actions pipeline (`.github/workflows/ci.yml`):
 2. **Test** - `go test -v ./...`
 3. **Release** - GoReleaser cross-compilation (on tag push)
 4. **Chocolatey** - Build and push `.nupkg` to Chocolatey (on tag push, Windows runner)
-5. **Docker** - Build and push 6 image variants to GHCR on push to main or tagged releases (matrix strategy)
+5. **Docker** - Build and push the `claude` image for linux/amd64 to GHCR on push to main or tagged releases: the only image this fork deploys
 6. **Helm** - Push Helm chart to GHCR OCI registry (on tag push)
 7. **Publish** - Promote draft release to published (after all jobs pass)
 
@@ -228,4 +228,4 @@ A single `docker/Dockerfile` uses multi-stage targets to produce 6 image variant
 - `--target copilot` — GitHub Copilot only (tagged `copilot`)
 - `--target gemini` — Gemini CLI only (tagged `gemini`)
 
-The `copilot` variant is Debian-based (`node:24-slim`) because the Copilot CLI needs glibc; it has no Chromium or whisper. CI builds and pushes all six variants to GHCR using a matrix strategy. Custom nclaw skills (`schedule`, `send-file`, `webhook`) are included in all variants; the third-party skills in the Alpine variants.
+The `copilot` variant is Debian-based (`node:24-slim`) because the Copilot CLI needs glibc; it has no Chromium or whisper. This fork's CI builds and pushes only the `claude` variant for linux/amd64 (upstream builds all six for amd64 and arm64); the others build locally with `make docker-*`. Custom nclaw skills (`schedule`, `send-file`, `webhook`) are included in all variants; the third-party skills in the Alpine variants.
