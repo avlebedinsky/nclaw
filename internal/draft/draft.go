@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/nickalie/nclaw/internal/blocks"
 	"github.com/nickalie/nclaw/internal/telegram"
 )
 
@@ -132,7 +133,7 @@ func (d *Drafter) pendingLocked(now time.Time) (string, bool) {
 }
 
 func preview(text string) string {
-	plain := []rune(telegram.PlainText(text))
+	plain := []rune(telegram.PlainText(blocks.StripPartial(text)))
 	if len(plain) > maxDraftRunes {
 		plain = append(plain[:maxDraftRunes-1], '…')
 	}

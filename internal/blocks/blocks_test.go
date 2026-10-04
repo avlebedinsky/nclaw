@@ -2,9 +2,11 @@ package blocks
 
 import (
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestPatterns(t *testing.T) {
@@ -46,4 +48,32 @@ func TestStripAll_OnlyBlocks(t *testing.T) {
 func TestStripAll_KeepsOtherCodeBlocks(t *testing.T) {
 	text := "```go\nfmt.Println(1)\n```"
 	assert.Equal(t, text, StripAll(text))
+}
+
+func TestButtonLabels(t *testing.T) {
+	text := "Удалить?\n```nclaw:buttons\n[\" Да \", \"\", \"Нет\"]\n```"
+	assert.Equal(t, []string{"Да", "Нет"}, ButtonLabels(text))
+	assert.Equal(t, "Удалить?", StripAll(text))
+}
+
+func TestButtonLabels_LastBlockLimitsAndLongLabels(t *testing.T) {
+	text := "```nclaw:buttons\n[\"old\"]\n```\n```nclaw:buttons\n" +
+		"[\"1\",\"2\",\"3\",\"4\",\"5\",\"6\",\"7\",\"" + strings.Repeat("я", 50) + "\"]\n```"
+	labels := ButtonLabels(text)
+
+	assert.Equal(t, []string{"1", "2", "3", "4", "5", "6"}, labels)
+	long := ButtonLabels("```nclaw:buttons\n[\"" + strings.Repeat("я", 50) + "\"]\n```")
+	require.Len(t, long, 1)
+	assert.Equal(t, strings.Repeat("я", 39)+"…", long[0])
+}
+
+func TestButtonLabels_MalformedOrMissing(t *testing.T) {
+	assert.Nil(t, ButtonLabels("no block"))
+	assert.Nil(t, ButtonLabels("```nclaw:buttons\n{\"a\":1}\n```"))
+}
+
+func TestStripPartial(t *testing.T) {
+	assert.Equal(t, "Удалить?", StripPartial("Удалить?\n```nclaw:buttons\n[\"Да\""))
+	assert.Equal(t, "a\n\nb", StripPartial("a\n```nclaw:schedule\n{}\n```\nb"))
+	assert.Equal(t, "code ```go\nx", StripPartial("code ```go\nx"))
 }

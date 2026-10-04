@@ -105,3 +105,8 @@ func TestDrafter_UniqueIDsAndNilFinish(t *testing.T) {
 	var d *Drafter
 	assert.NotPanics(t, d.Finish)
 }
+
+func TestPreview_HidesCommandBlocksBeingWritten(t *testing.T) {
+	assert.Equal(t, "Удалить?", preview("Удалить?\n```nclaw:buttons\n[\"Да\""))
+	assert.Equal(t, "Готово", preview("Готово\n```nclaw:schedule\n{\"action\":\"create\"}\n```"))
+}

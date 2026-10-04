@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"time"
 
@@ -38,14 +39,16 @@ func (h *Handler) Button(_ context.Context, _ *bot.Bot, update *models.Update) {
 	q := update.CallbackQuery
 	toast := staleButton
 	if msg := q.Message.Message; msg != nil {
-		toast = h.press(msg, buttons.Parse(q.Data))
+		toast = h.press(q, msg, buttons.Parse(q.Data))
 	}
 	go h.answer(q.ID, toast)
 }
 
-func (h *Handler) press(msg *models.Message, p buttons.Press) string {
+func (h *Handler) press(q *models.CallbackQuery, msg *models.Message, p buttons.Press) string {
 	key := chatqueue.Key{ChatID: msg.Chat.ID, ThreadID: msg.MessageThreadID}
 	switch p.Kind {
+	case buttons.Choice:
+		return h.choose(q, msg, key)
 	case buttons.Done:
 		go h.closeButtons(msg, "✅ Done")
 		return "Done"
@@ -54,6 +57,31 @@ func (h *Handler) press(msg *models.Message, p buttons.Press) string {
 	default:
 		return staleButton
 	}
+}
+
+func (h *Handler) choose(q *models.CallbackQuery, msg *models.Message, key chatqueue.Key) string {
+	label := buttons.FromMarkup(msg.ReplyMarkup).Label(q.Data)
+	if label == "" {
+		return staleButton
+	}
+	in := Inbound{msgID: msg.ID, sender: pressedBy(msg, &q.From), text: choicePrompt(msg.Text, label)}
+	if err := h.Queue.Enqueue(key, in, messageSettle); err != nil {
+		log.Printf("handler: chat=%d thread=%d choice not queued: %v", key.ChatID, key.ThreadID, err)
+		return "Could not send: " + err.Error()
+	}
+	go h.closeButtons(msg, "→ "+label)
+	return label
+}
+
+func choicePrompt(question, label string) string {
+	return fmt.Sprintf("[Pressed a button under your message %q]\n\n%s", shorten(question, 200), label)
+}
+
+func shorten(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n-1]) + "…"
+	}
+	return s
 }
 
 func (h *Handler) snooze(msg *models.Message, key chatqueue.Key, after time.Duration) string {

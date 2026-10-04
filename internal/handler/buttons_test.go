@@ -189,3 +189,53 @@ func TestAllowChat_ButtonPresses(t *testing.T) {
 
 	assert.Equal(t, 1, passed)
 }
+
+func question() *models.Message {
+	kb := buttons.Markup(buttons.Choices([]string{"Да, удалить", "Нет"}))
+	return &models.Message{
+		ID: 77, Text: "Нашёл 4 папки кеша. Удалить?", Chat: models.Chat{ID: 100}, ReplyMarkup: &kb,
+	}
+}
+
+func TestButton_ChoiceGoesToTheAgentAsTheUsersReply(t *testing.T) {
+	client := &mockClient{}
+	h := newTestHandler(t, &mockProvider{client: client}, nil)
+	fb := &fakeButtons{}
+	h.Buttons = fb
+
+	h.Button(context.Background(), nil, press(question(), "c:0"))
+
+	assert.Equal(t, "Да, удалить", fb.waitAnswer(t))
+	e := fb.waitEdit(t)
+	assert.Equal(t, "Нашёл 4 папки кеша. Удалить?\n\n→ Да, удалить", e.text)
+	assert.Nil(t, e.kb)
+	waitQueue(t, h)
+	assert.Contains(t, client.lastQuery, "[Pressed a button under your message \"Нашёл 4 папки кеша. Удалить?\"]\n\nДа, удалить")
+}
+
+func TestButton_ChoiceInAGroupNamesWhoPressed(t *testing.T) {
+	client := &mockClient{}
+	h := newTestHandler(t, &mockProvider{client: client}, nil)
+	fb := &fakeButtons{}
+	h.Buttons = fb
+	msg := question()
+	msg.Chat.ID = -100500
+	q := press(msg, "c:1")
+	q.CallbackQuery.From = models.User{FirstName: "Анна"}
+
+	h.Button(context.Background(), nil, q)
+
+	assert.Equal(t, "Нет", fb.waitAnswer(t))
+	waitQueue(t, h)
+	assert.Contains(t, client.lastQuery, "[From: Анна]\n[Pressed a button")
+}
+
+func TestButton_ChoiceWithoutKeyboardIsStale(t *testing.T) {
+	h, fb, _ := newButtonHandler(t)
+	msg := question()
+	msg.ReplyMarkup = nil
+
+	h.Button(context.Background(), nil, press(msg, "c:0"))
+
+	assert.Equal(t, staleButton, fb.waitAnswer(t))
+}

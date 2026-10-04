@@ -568,3 +568,31 @@ func TestProcess_ButtonsStayOnTheVisiblePartOfALongAnswer(t *testing.T) {
 	assert.Equal(t, kb, ms.calls[0].buttons)
 	assert.Equal(t, 1, docs)
 }
+
+func TestProcess_ButtonsBlockBecomesChoices(t *testing.T) {
+	ms := &mockSend{}
+	p := New(ms.fn(), sendfile.Senders{}, true)
+
+	text := "Нашёл 4 папки кеша. Удалить?\n```nclaw:buttons\n[\"Да, удалить\", \"Нет\"]\n```"
+	p.Process(context.Background(), &cli.Result{Text: text, FullText: text}, nil, Dest{ChatID: 1}, "/tmp", false)
+
+	require.Len(t, ms.calls, 1)
+	assert.Equal(t, "Нашёл 4 папки кеша. Удалить?", ms.calls[0].text)
+	assert.Equal(t, buttons.Choices([]string{"Да, удалить", "Нет"}), ms.calls[0].buttons)
+}
+
+func TestProcess_CallerButtonsWinOnTheLastMessage(t *testing.T) {
+	ms := &mockSend{}
+	p := New(ms.fn(), sendfile.Senders{}, true)
+	p.SetStreamMessages(true)
+
+	result := &cli.Result{
+		Text:     "second",
+		Messages: []string{"first\n```nclaw:buttons\n[\"A\"]\n```", "second\n```nclaw:buttons\n[\"B\"]\n```"},
+	}
+	p.Process(context.Background(), result, nil, Dest{ChatID: 1, Buttons: buttons.Reminder()}, "/tmp", false)
+
+	require.Len(t, ms.calls, 2)
+	assert.Equal(t, buttons.Choices([]string{"A"}), ms.calls[0].buttons)
+	assert.Equal(t, buttons.Reminder(), ms.calls[1].buttons)
+}
