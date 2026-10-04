@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -268,6 +269,18 @@ func TestPreparePrompt_AppendPrompt(t *testing.T) {
 	assert.Contains(t, args, "extra instructions")
 }
 
+func TestPreparePrompt_RendersSystemPromptFreshOnResume(t *testing.T) {
+	c := New()
+	c.AppendSystemPrompt("chat context")
+	c.bin.Reset()
+	c.preparePrompt()
+
+	args := c.bin.Args()
+	i := slices.Index(args, "--system-prompt-snapshot")
+	require.GreaterOrEqual(t, i, 0)
+	assert.Equal(t, "off", args[i+1])
+}
+
 func TestPreparePrompt_PermissionMode(t *testing.T) {
 	c := New().PermissionMode("plan")
 	c.bin.Reset()
@@ -302,6 +315,7 @@ func TestPreparePrompt_Empty(t *testing.T) {
 	args := c.bin.Args()
 	assert.NotContains(t, args, "--system-prompt")
 	assert.NotContains(t, args, "--append-system-prompt")
+	assert.NotContains(t, args, "--system-prompt-snapshot")
 	assert.NotContains(t, args, "--permission-mode")
 	assert.NotContains(t, args, "--mcp-config")
 	assert.NotContains(t, args, "--json-schema")
