@@ -115,6 +115,7 @@ func TestRun_ContinuesInChatDirWithSharedPrompt(t *testing.T) {
 	assert.True(t, client.skipPerms)
 	assert.Equal(t, 1, p.preInvoked)
 	assert.Contains(t, client.systemPrompt, telegram.Prompt)
+	assert.Contains(t, client.systemPrompt, runRule)
 	assert.Contains(t, client.systemPrompt, "Scheduler timezone: Europe/Moscow (UTC+03:00)")
 	assert.Contains(t, client.systemPrompt, "Current scheduled tasks: none")
 	assert.Contains(t, client.systemPrompt, "demo skill body")
