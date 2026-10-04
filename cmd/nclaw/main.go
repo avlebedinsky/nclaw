@@ -160,7 +160,6 @@ func setupBot(database *gorm.DB, provider cli.Provider) *app {
 	if config.LiveDrafts() {
 		h.Drafts = draftAPI{b: b}
 	}
-	registerCommands(b, h)
 
 	fileSenders := sendfile.Senders{
 		Doc:   newSendDocFunc(b),
@@ -179,6 +178,7 @@ func setupBot(database *gorm.DB, provider cli.Provider) *app {
 		webhookMgr.SetPipeline(p)
 	}
 	authWatch := wireAuth(provider, h, p, loc)
+	registerCommands(b, h)
 
 	// Load tasks and start scheduler before webhook server to avoid a race where
 	// an incoming webhook creates a task that LoadTasks then re-registers as a duplicate job.
