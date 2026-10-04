@@ -394,13 +394,7 @@ func (c *Claude) prepareModel() {
 }
 
 func (c *Claude) preparePrompt() {
-	if c.systemPrompt != "" {
-		c.bin.Arg("--system-prompt", c.systemPrompt)
-	}
-
-	if c.appendPrompt != "" {
-		c.bin.Arg("--append-system-prompt", c.appendPrompt)
-	}
+	c.prepareSystemPrompt()
 
 	if c.permissionMode != "" {
 		c.bin.Arg("--permission-mode", c.permissionMode)
@@ -412,6 +406,21 @@ func (c *Claude) preparePrompt() {
 
 	if c.jsonSchema != "" {
 		c.bin.Arg("--json-schema", c.jsonSchema)
+	}
+}
+
+func (c *Claude) prepareSystemPrompt() {
+	if c.systemPrompt != "" {
+		c.bin.Arg("--system-prompt", c.systemPrompt)
+	}
+
+	if c.appendPrompt != "" {
+		c.bin.Arg("--append-system-prompt", c.appendPrompt)
+	}
+
+	if c.systemPrompt != "" || c.appendPrompt != "" {
+		// By default a resumed conversation keeps the prompt it started with and ignores the one passed now.
+		c.bin.Arg("--system-prompt-snapshot", "off")
 	}
 }
 
