@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/nickalie/nclaw/internal/buttons"
+	"github.com/nickalie/nclaw/internal/cli"
 	"github.com/nickalie/nclaw/internal/model"
 )
 
@@ -238,4 +239,94 @@ func TestButton_ChoiceWithoutKeyboardIsStale(t *testing.T) {
 	h.Button(context.Background(), nil, press(msg, "c:0"))
 
 	assert.Equal(t, staleButton, fb.waitAnswer(t))
+}
+
+type interruptibleClient struct {
+	mockClient
+	mu      sync.Mutex
+	ctx     context.Context
+	queries []string
+	started chan string
+}
+
+func (c *interruptibleClient) Context(ctx context.Context) cli.Client {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.ctx = ctx
+	return c
+}
+func (c *interruptibleClient) Dir(string) cli.Client                { return c }
+func (c *interruptibleClient) SkipPermissions() cli.Client          { return c }
+func (c *interruptibleClient) AppendSystemPrompt(string) cli.Client { return c }
+func (c *interruptibleClient) Continue(query string) (*cli.Result, error) {
+	c.mu.Lock()
+	ctx := c.ctx
+	c.queries = append(c.queries, query)
+	first := len(c.queries) == 1
+	c.mu.Unlock()
+	c.started <- query
+	if first {
+		<-ctx.Done()
+		return &cli.Result{Text: "half done"}, context.Cause(ctx)
+	}
+	return &cli.Result{Text: "done with the new request"}, nil
+}
+
+type interruptibleProvider struct {
+	mockProvider
+	client *interruptibleClient
+}
+
+func (p *interruptibleProvider) NewClient() cli.Client { return p.client }
+
+func startLongRun(t *testing.T) (*Handler, *interruptibleClient, *safeSent, *fakeButtons) {
+	t.Helper()
+	client := &interruptibleClient{started: make(chan string, 4)}
+	sent := &safeSent{}
+	h := newTestHandler(t, &interruptibleProvider{client: client}, sent.send)
+	h.Send = sent.send
+	fb := &fakeButtons{}
+	h.Buttons = fb
+	h.Default(context.Background(), nil, chatMessage("collect a long report"))
+	<-client.started
+	return h, client, sent, fb
+}
+
+func statusMessage() *models.Message {
+	return &models.Message{ID: 9, Text: "🔧 Bash: make\nstep 1", Chat: models.Chat{ID: 100}}
+}
+
+func TestButton_AnswerNewInterruptsAndAnswersTheNewMessage(t *testing.T) {
+	h, client, sent, fb := startLongRun(t)
+	h.Default(context.Background(), nil, chatMessage("no, just the summary"))
+	require.Eventually(t, func() bool { return h.Queue.Snapshot(testKey).PendingUser == 1 }, 5*time.Second, 10*time.Millisecond)
+
+	h.Button(context.Background(), nil, press(statusMessage(), "n"))
+
+	assert.Equal(t, "⏭ Answering your new messages.", fb.waitAnswer(t))
+	assert.Contains(t, <-client.started, "no, just the summary")
+	waitQueue(t, h)
+	assert.Equal(t, []string{"done with the new request"}, sent.all())
+}
+
+func TestButton_AnswerNewWithoutNewMessagesDoesNothing(t *testing.T) {
+	h, _, _, fb := startLongRun(t)
+
+	h.Button(context.Background(), nil, press(statusMessage(), "n"))
+
+	assert.Equal(t, "No new messages to answer.", fb.waitAnswer(t))
+	assert.True(t, h.Queue.Snapshot(testKey).Running)
+	h.Queue.Stop(testKey)
+	waitQueue(t, h)
+}
+
+func TestButton_StopStopsTheRunAndDropsTheQueue(t *testing.T) {
+	h, _, sent, fb := startLongRun(t)
+	h.Default(context.Background(), nil, chatMessage("and this"))
+
+	h.Button(context.Background(), nil, press(statusMessage(), "s"))
+
+	assert.Contains(t, fb.waitAnswer(t), "⏹ Stopped your request after")
+	waitQueue(t, h)
+	assert.Empty(t, sent.all())
 }

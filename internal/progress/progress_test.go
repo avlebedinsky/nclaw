@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/nickalie/nclaw/internal/buttons"
 	"github.com/nickalie/nclaw/internal/cli"
 )
 
@@ -17,6 +18,7 @@ type call struct {
 	op    string
 	msgID int
 	text  string
+	kb    buttons.Keyboard
 }
 
 type fakeAPI struct {
@@ -25,17 +27,17 @@ type fakeAPI struct {
 	editErr error
 }
 
-func (f *fakeAPI) Send(_ context.Context, _ int64, _ int, text string) (int, error) {
+func (f *fakeAPI) Send(_ context.Context, _ int64, _ int, text string, kb buttons.Keyboard) (int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.calls = append(f.calls, call{op: "send", msgID: 7, text: text})
+	f.calls = append(f.calls, call{op: "send", msgID: 7, text: text, kb: kb})
 	return 7, nil
 }
 
-func (f *fakeAPI) Edit(_ context.Context, _ int64, msgID int, text string) error {
+func (f *fakeAPI) Edit(_ context.Context, _ int64, msgID int, text string, kb buttons.Keyboard) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.calls = append(f.calls, call{op: "edit", msgID: msgID, text: text})
+	f.calls = append(f.calls, call{op: "edit", msgID: msgID, text: text, kb: kb})
 	return f.editErr
 }
 
@@ -154,4 +156,31 @@ func TestNew_GroupChatsUseLongerInterval(t *testing.T) {
 	p := New(&fakeAPI{}, 100, 0, Options{})
 	defer p.Finish(context.Background())
 	assert.Equal(t, 3*time.Second, p.opts.MinInterval)
+}
+
+func TestReporter_ShowsControlsAndUpdatesThemWhenTheyChange(t *testing.T) {
+	api := &fakeAPI{}
+	var mu sync.Mutex
+	pending := 0
+	opts := fastOptions()
+	opts.Controls = func() buttons.Keyboard {
+		mu.Lock()
+		defer mu.Unlock()
+		return buttons.Progress(pending)
+	}
+	r := New(api, 1, 0, opts)
+
+	r.OnTool(cli.ToolEvent{Name: "Bash", Detail: "make"})
+	require.Eventually(t, func() bool { return api.count("send") == 1 }, 2*time.Second, 5*time.Millisecond)
+	assert.Equal(t, buttons.Progress(0), api.snapshot()[0].kb)
+
+	mu.Lock()
+	pending = 2
+	mu.Unlock()
+	require.Eventually(t, func() bool { return api.count("edit") >= 1 }, 2*time.Second, 5*time.Millisecond)
+	r.Finish(context.Background())
+
+	calls := api.snapshot()
+	assert.Equal(t, buttons.Progress(2), calls[1].kb)
+	assert.Equal(t, 1, api.count("edit"))
 }

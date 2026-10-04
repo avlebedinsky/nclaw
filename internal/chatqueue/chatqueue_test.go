@@ -267,3 +267,54 @@ func TestIdleLanesAreRemoved(t *testing.T) {
 	defer q.mu.Unlock()
 	assert.Empty(t, q.lanes)
 }
+
+func TestInterrupt_CancelsRunningBatchAndAnswersPendingNext(t *testing.T) {
+	var mu sync.Mutex
+	var batches [][]string
+	var causes []error
+	started := make(chan struct{}, 4)
+	q := New(func(ctx context.Context, _ Key, batch []string) {
+		mu.Lock()
+		batches = append(batches, batch)
+		mu.Unlock()
+		started <- struct{}{}
+		if batch[0] == "long task" {
+			<-ctx.Done()
+		}
+		mu.Lock()
+		causes = append(causes, context.Cause(ctx))
+		mu.Unlock()
+	}, Options{})
+
+	require.NoError(t, q.Enqueue(key, "long task", settle))
+	<-started
+	require.NoError(t, q.Enqueue(key, "no, do this instead", settle))
+
+	assert.True(t, q.Interrupt(key))
+	<-started
+	waitIdle(t, q)
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, [][]string{{"long task"}, {"no, do this instead"}}, batches)
+	assert.ErrorIs(t, causes[0], ErrInterrupted)
+	assert.NoError(t, causes[1])
+}
+
+func TestInterrupt_LeavesJobsAndIdleLanesAlone(t *testing.T) {
+	q := New(newRecorder().run, Options{})
+	assert.False(t, q.Interrupt(key))
+
+	jobStarted, release := make(chan struct{}), make(chan struct{})
+	done, err := q.Submit(key, Job{Kind: KindScheduled, Fn: func(ctx context.Context) {
+		close(jobStarted)
+		<-release
+		assert.NoError(t, context.Cause(ctx))
+	}})
+	require.NoError(t, err)
+	<-jobStarted
+
+	assert.False(t, q.Interrupt(key))
+	close(release)
+	require.NoError(t, <-done)
+}

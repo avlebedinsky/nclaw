@@ -13,6 +13,7 @@ import (
 
 	"github.com/go-telegram/bot"
 
+	"github.com/nickalie/nclaw/internal/buttons"
 	"github.com/nickalie/nclaw/internal/cli"
 )
 
@@ -28,16 +29,18 @@ var icons = map[string]string{
 
 // MessageAPI is the slice of the Telegram API a Reporter needs.
 type MessageAPI interface {
-	Send(ctx context.Context, chatID int64, threadID int, text string) (int, error)
-	Edit(ctx context.Context, chatID int64, msgID int, text string) error
+	Send(ctx context.Context, chatID int64, threadID int, text string, kb buttons.Keyboard) (int, error)
+	Edit(ctx context.Context, chatID int64, msgID int, text string, kb buttons.Keyboard) error
 	Delete(ctx context.Context, chatID int64, msgID int) error
 }
 
-// Options tunes a Reporter.
+// Options tunes a Reporter. Controls, when set, returns the buttons to show under the
+// status message; a change in them updates the message.
 type Options struct {
 	MinInterval time.Duration
 	Heartbeat   time.Duration
 	Tick        time.Duration
+	Controls    func() buttons.Keyboard
 }
 
 // Reporter keeps one status message per run up to date.
@@ -53,6 +56,7 @@ type Reporter struct {
 	started     time.Time
 	msgID       int
 	lastStep    string
+	lastKeys    string
 	lastFlush   time.Time
 	nextAllowed time.Time
 
@@ -131,9 +135,12 @@ func (r *Reporter) loop() {
 }
 
 func (r *Reporter) flush() {
+	kb := r.controls()
+	keys := fmt.Sprint(kb)
+
 	r.mu.Lock()
 	step := r.step
-	text, msgID, due := r.pendingLocked(time.Now())
+	text, msgID, due := r.pendingLocked(time.Now(), keys)
 	r.mu.Unlock()
 	if !due {
 		return
@@ -144,14 +151,21 @@ func (r *Reporter) flush() {
 
 	var err error
 	if msgID == 0 {
-		msgID, err = r.api.Send(ctx, r.chatID, r.threadID, text)
+		msgID, err = r.api.Send(ctx, r.chatID, r.threadID, text, kb)
 	} else {
-		err = r.api.Edit(ctx, r.chatID, msgID, text)
+		err = r.api.Edit(ctx, r.chatID, msgID, text, kb)
 	}
-	r.record(step, msgID, err)
+	r.record(step, keys, msgID, err)
 }
 
-func (r *Reporter) pendingLocked(now time.Time) (text string, msgID int, due bool) {
+func (r *Reporter) controls() buttons.Keyboard {
+	if r.opts.Controls == nil {
+		return nil
+	}
+	return r.opts.Controls()
+}
+
+func (r *Reporter) pendingLocked(now time.Time, keys string) (text string, msgID int, due bool) {
 	if r.steps == 0 || now.Before(r.nextAllowed) {
 		return "", 0, false
 	}
@@ -160,13 +174,14 @@ func (r *Reporter) pendingLocked(now time.Time) (text string, msgID int, due boo
 		return text, 0, true
 	}
 	since := now.Sub(r.lastFlush)
-	if since < r.opts.MinInterval || (r.step == r.lastStep && since < r.opts.Heartbeat) {
+	unchanged := r.step == r.lastStep && keys == r.lastKeys
+	if since < r.opts.MinInterval || (unchanged && since < r.opts.Heartbeat) {
 		return "", 0, false
 	}
 	return text, r.msgID, true
 }
 
-func (r *Reporter) record(step string, msgID int, err error) {
+func (r *Reporter) record(step, keys string, msgID int, err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.lastFlush = time.Now()
@@ -177,7 +192,7 @@ func (r *Reporter) record(step string, msgID int, err error) {
 	case err != nil:
 		log.Printf("progress: update status message: %v", err)
 	default:
-		r.msgID, r.lastStep = msgID, step
+		r.msgID, r.lastStep, r.lastKeys = msgID, step, keys
 	}
 }
 

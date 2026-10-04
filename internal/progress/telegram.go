@@ -4,6 +4,8 @@ import (
 	"context"
 
 	"github.com/go-telegram/bot"
+
+	"github.com/nickalie/nclaw/internal/buttons"
 )
 
 type botAPI struct {
@@ -15,16 +17,22 @@ func NewBotAPI(b *bot.Bot) MessageAPI {
 	return botAPI{b: b}
 }
 
-func (a botAPI) Send(ctx context.Context, chatID int64, threadID int, text string) (int, error) {
-	msg, err := a.b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, MessageThreadID: threadID, Text: text})
+func (a botAPI) Send(ctx context.Context, chatID int64, threadID int, text string, kb buttons.Keyboard) (int, error) {
+	params := &bot.SendMessageParams{ChatID: chatID, MessageThreadID: threadID, Text: text}
+	if len(kb) > 0 {
+		params.ReplyMarkup = buttons.Markup(kb)
+	}
+	msg, err := a.b.SendMessage(ctx, params)
 	if err != nil {
 		return 0, err
 	}
 	return msg.ID, nil
 }
 
-func (a botAPI) Edit(ctx context.Context, chatID int64, msgID int, text string) error {
-	_, err := a.b.EditMessageText(ctx, &bot.EditMessageTextParams{ChatID: chatID, MessageID: msgID, Text: text})
+func (a botAPI) Edit(ctx context.Context, chatID int64, msgID int, text string, kb buttons.Keyboard) error {
+	_, err := a.b.EditMessageText(ctx, &bot.EditMessageTextParams{
+		ChatID: chatID, MessageID: msgID, Text: text, ReplyMarkup: buttons.Markup(kb),
+	})
 	return err
 }
 

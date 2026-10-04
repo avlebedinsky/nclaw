@@ -54,9 +54,23 @@ func (h *Handler) press(q *models.CallbackQuery, msg *models.Message, p buttons.
 		return "Done"
 	case buttons.Snooze:
 		return h.snooze(msg, key, p.After)
+	case buttons.Stop:
+		return stopText(h.Queue.Stop(key))
+	case buttons.AnswerNew:
+		return h.answerNew(key)
 	default:
 		return staleButton
 	}
+}
+
+func (h *Handler) answerNew(key chatqueue.Key) string {
+	if h.Queue.Snapshot(key).PendingUser == 0 {
+		return "No new messages to answer."
+	}
+	if !h.Queue.Interrupt(key) {
+		return "Nothing to interrupt."
+	}
+	return "⏭ Answering your new messages."
 }
 
 func (h *Handler) choose(q *models.CallbackQuery, msg *models.Message, key chatqueue.Key) string {

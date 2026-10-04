@@ -13,6 +13,7 @@ import (
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
 
+	"github.com/nickalie/nclaw/internal/buttons"
 	"github.com/nickalie/nclaw/internal/chatqueue"
 	"github.com/nickalie/nclaw/internal/cli"
 	"github.com/nickalie/nclaw/internal/config"
@@ -165,7 +166,7 @@ func (h *Handler) RunBatch(ctx context.Context, key chatqueue.Key, batch []Inbou
 	out, streamed := h.run(ctx, key, dest, prompt)
 	stopTyping()
 
-	if errors.Is(out.Err, chatqueue.ErrStopped) || errors.Is(out.Err, chatqueue.ErrShuttingDown) {
+	if interrupted(out.Err) {
 		log.Printf("handler: run for chat=%d thread=%d interrupted: %v", key.ChatID, key.ThreadID, out.Err)
 		h.react(key, batch, "")
 		return
@@ -215,7 +216,9 @@ func (h *Handler) newReporter(key chatqueue.Key) *progress.Reporter {
 	if h.Progress == nil {
 		return nil
 	}
-	return progress.New(h.Progress, key.ChatID, key.ThreadID, progress.Options{})
+	return progress.New(h.Progress, key.ChatID, key.ThreadID, progress.Options{
+		Controls: func() buttons.Keyboard { return buttons.Progress(h.Queue.Snapshot(key).PendingUser) },
+	})
 }
 
 func withErrorText(result *cli.Result, err error) *cli.Result {
@@ -233,6 +236,11 @@ func withErrorText(result *cli.Result, err error) *cli.Result {
 		text := "error: " + err.Error()
 		return &cli.Result{Text: text, FullText: text}
 	}
+}
+
+func interrupted(err error) bool {
+	return errors.Is(err, chatqueue.ErrStopped) || errors.Is(err, chatqueue.ErrInterrupted) ||
+		errors.Is(err, chatqueue.ErrShuttingDown)
 }
 
 // resolveContent extracts text and attachment from a message, falling back to reply attachment.

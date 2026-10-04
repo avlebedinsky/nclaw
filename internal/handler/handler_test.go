@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/nickalie/nclaw/internal/buttons"
 	"github.com/nickalie/nclaw/internal/chatqueue"
 	"github.com/nickalie/nclaw/internal/cli"
 	"github.com/nickalie/nclaw/internal/config"
@@ -681,7 +682,7 @@ func TestDefault_EmptyMessage(t *testing.T) {
 	}
 	h.Default(context.Background(), newTestBot(t), update)
 
-	assert.Equal(t, 0, h.Queue.Snapshot(chatKey(100)).PendingUser)
+	assert.Equal(t, 0, h.Queue.Snapshot(testKey).PendingUser)
 }
 
 // --- buildPrompt tests ---
@@ -1046,15 +1047,17 @@ func (p *progressProvider) NewClient() cli.Client { return p.client }
 type progressAPI struct {
 	mu  sync.Mutex
 	ops []string
+	kb  buttons.Keyboard
 }
 
-func (a *progressAPI) Send(_ context.Context, _ int64, _ int, text string) (int, error) {
+func (a *progressAPI) Send(_ context.Context, _ int64, _ int, text string, kb buttons.Keyboard) (int, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.ops = append(a.ops, "send:"+text[:strings.Index(text, "\n")])
+	a.kb = kb
 	return 9, nil
 }
-func (a *progressAPI) Edit(context.Context, int64, int, string) error { return nil }
+func (a *progressAPI) Edit(context.Context, int64, int, string, buttons.Keyboard) error { return nil }
 func (a *progressAPI) Delete(_ context.Context, _ int64, msgID int) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -1071,6 +1074,7 @@ func TestRunBatch_ShowsAndRemovesProgress(t *testing.T) {
 	h.RunBatch(context.Background(), testKey, []Inbound{{text: "run tests"}})
 
 	assert.Equal(t, []string{"send:🔧 Bash: make test", "delete:9"}, api.ops)
+	assert.Equal(t, buttons.Progress(0), api.kb)
 	assert.Equal(t, []string{"tests pass"}, sent.all())
 }
 
