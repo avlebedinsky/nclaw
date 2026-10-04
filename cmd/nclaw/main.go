@@ -143,6 +143,7 @@ func setupBot(database *gorm.DB, provider cli.Provider) *app {
 	b, err := bot.New(config.TelegramBotToken(),
 		bot.WithNotAsyncHandlers(),
 		bot.WithMiddlewares(handler.AllowChat),
+		bot.WithAllowedUpdates(handler.Updates),
 		bot.WithDefaultHandler(h.Default),
 		bot.WithHTTPClient(time.Minute, &http.Client{Timeout: 5 * time.Minute}),
 	)

@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -1317,4 +1318,27 @@ func TestAllowChat_PassesStopButtonFromWhitelistedChat(t *testing.T) {
 	next(context.Background(), nil, &models.Update{StoppedMessageGeneration: &models.MessageGenerationStopped{Chat: models.Chat{ID: 5}}})
 
 	assert.Equal(t, 1, passed)
+}
+
+func TestUpdates_SubscribeToEveryUpdateTheBotRoutes(t *testing.T) {
+	routed := []*models.Update{
+		chatMessage("hi"),
+		{CallbackQuery: &models.CallbackQuery{Message: models.MaybeInaccessibleMessage{
+			Type: models.MaybeInaccessibleMessageTypeMessage, Message: reminder(),
+		}}},
+		{StoppedMessageGeneration: &models.MessageGenerationStopped{Chat: models.Chat{ID: 100}}},
+	}
+	for _, u := range routed {
+		_, ok := updateChatID(u)
+		require.True(t, ok)
+		raw, err := json.Marshal(u)
+		require.NoError(t, err)
+		var fields map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal(raw, &fields))
+		delete(fields, "update_id")
+		require.Len(t, fields, 1)
+		for name := range fields {
+			assert.Contains(t, Updates, name)
+		}
+	}
 }
