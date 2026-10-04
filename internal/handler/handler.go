@@ -38,6 +38,8 @@ type Handler struct {
 	Drafts      draft.API
 	AuthStatus  func() string
 	Logins      *Logins
+	Buttons     ButtonAPI
+	Tasks       TaskManager
 }
 
 // MessageReactor sets the bot's reaction on a message; an empty emoji clears it.
@@ -100,6 +102,19 @@ func updateChatID(update *models.Update) (int64, bool) {
 		return update.Message.Chat.ID, true
 	case update.StoppedMessageGeneration != nil:
 		return update.StoppedMessageGeneration.Chat.ID, true
+	case update.CallbackQuery != nil:
+		return callbackChatID(&update.CallbackQuery.Message)
+	default:
+		return 0, false
+	}
+}
+
+func callbackChatID(m *models.MaybeInaccessibleMessage) (int64, bool) {
+	switch {
+	case m.Message != nil:
+		return m.Message.Chat.ID, true
+	case m.InaccessibleMessage != nil:
+		return m.InaccessibleMessage.Chat.ID, true
 	default:
 		return 0, false
 	}

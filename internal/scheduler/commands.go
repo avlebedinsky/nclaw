@@ -56,13 +56,15 @@ func (s *Scheduler) executeCommand(jsonStr string, chatID int64, threadID int) e
 	case "create":
 		return s.createTaskFromCommand(&cmd, chatID, threadID)
 	case "pause", "resume", "cancel":
-		return s.applyTaskAction(cmd.Action, cmd.TaskID, chatID, threadID)
+		return s.TaskAction(cmd.Action, cmd.TaskID, chatID, threadID)
 	default:
 		return fmt.Errorf("unknown action %q", cmd.Action)
 	}
 }
 
-func (s *Scheduler) applyTaskAction(action, taskID string, chatID int64, threadID int) error {
+// TaskAction pauses, resumes or cancels a task of the given chat/thread; a task of another
+// chat/thread is reported as not found.
+func (s *Scheduler) TaskAction(action, taskID string, chatID int64, threadID int) error {
 	if err := s.checkOwner(taskID, chatID, threadID); err != nil {
 		return err
 	}

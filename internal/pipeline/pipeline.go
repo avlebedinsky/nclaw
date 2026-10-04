@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/nickalie/nclaw/internal/blocks"
+	"github.com/nickalie/nclaw/internal/buttons"
 	"github.com/nickalie/nclaw/internal/cli"
 	"github.com/nickalie/nclaw/internal/sendfile"
 	"github.com/nickalie/nclaw/internal/telegram"
@@ -18,12 +19,13 @@ type BlockExecutor interface {
 	ExecuteBlocks(text string, chatID int64, threadID int) string
 }
 
-// Dest addresses a message: the chat, its forum thread and, when non-zero, the
-// message being answered.
+// Dest addresses a message: the chat, its forum thread, when non-zero the message
+// being answered, and the buttons to put under the last message sent.
 type Dest struct {
 	ChatID   int64
 	ThreadID int
 	ReplyTo  int
+	Buttons  buttons.Keyboard
 }
 
 // SendFunc sends a text message to a destination with an optional parse mode.
@@ -265,13 +267,18 @@ func (p *Pipeline) sendReply(ctx context.Context, dest Dest, text string) {
 	file := []byte(telegram.Markdown(text))
 	if err := p.senders.Doc(ctx, dest.ChatID, dest.ThreadID, "answer.md", file, longAnswerCaption); err != nil {
 		log.Printf("pipeline: send long answer as file: %v", err)
-		dest.ReplyTo = 0
+		dest.ReplyTo, dest.Buttons = 0, nil
 		p.sendChunks(ctx, dest, chunks[1:])
 	}
 }
 
 func (p *Pipeline) sendChunks(ctx context.Context, dest Dest, chunks []string) {
-	for _, chunk := range chunks {
+	kb := dest.Buttons
+	for i, chunk := range chunks {
+		dest.Buttons = nil
+		if i == len(chunks)-1 {
+			dest.Buttons = kb
+		}
 		p.sendChunk(ctx, dest, chunk)
 		dest.ReplyTo = 0
 	}

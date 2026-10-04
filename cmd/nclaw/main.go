@@ -19,6 +19,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/nickalie/nclaw/internal/authwatch"
+	"github.com/nickalie/nclaw/internal/buttons"
 	"github.com/nickalie/nclaw/internal/chatqueue"
 	"github.com/nickalie/nclaw/internal/cli"
 	"github.com/nickalie/nclaw/internal/cli/claude"
@@ -160,6 +161,7 @@ func setupBot(database *gorm.DB, provider cli.Provider) *app {
 	if config.LiveDrafts() {
 		h.Drafts = draftAPI{b: b}
 	}
+	h.Buttons = buttonAPI{b: b}
 
 	fileSenders := sendfile.Senders{
 		Doc:   newSendDocFunc(b),
@@ -169,6 +171,7 @@ func setupBot(database *gorm.DB, provider cli.Provider) *app {
 	if err != nil {
 		log.Fatal("scheduler: ", err)
 	}
+	h.Tasks = sched
 
 	webhookMgr := createWebhookManager(database, inv, queue)
 	p := buildPipeline(b, fileSenders, sched, webhookMgr)
@@ -301,6 +304,7 @@ func registerCommands(b *bot.Bot, h *handler.Handler) {
 	}
 	b.RegisterHandlerMatchFunc(h.MatchCommand, h.Command)
 	b.RegisterHandlerMatchFunc(h.MatchStopGeneration, h.StopGeneration)
+	b.RegisterHandlerMatchFunc(h.MatchButton, h.Button)
 	if _, err := b.SetMyCommands(ctx, &bot.SetMyCommandsParams{Commands: handler.Commands}); err != nil {
 		log.Printf("telegram: setMyCommands: %v", err)
 	}
@@ -478,6 +482,26 @@ func buildInputMedia(f sendfile.File) models.InputMedia {
 	}
 }
 
+type buttonAPI struct {
+	b *bot.Bot
+}
+
+func (a buttonAPI) Answer(ctx context.Context, queryID, text string) error {
+	_, err := a.b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{CallbackQueryID: queryID, Text: text})
+	return err
+}
+
+func (a buttonAPI) Edit(ctx context.Context, msg *models.Message, text string, kb buttons.Keyboard) error {
+	_, err := a.b.EditMessageText(ctx, &bot.EditMessageTextParams{
+		ChatID:      msg.Chat.ID,
+		MessageID:   msg.ID,
+		Text:        text,
+		Entities:    msg.Entities,
+		ReplyMarkup: buttons.Markup(kb),
+	})
+	return err
+}
+
 type draftAPI struct {
 	b *bot.Bot
 }
@@ -516,6 +540,9 @@ func newPipelineSendFunc(b *bot.Bot) pipeline.SendFunc {
 		}
 		if dest.ReplyTo != 0 {
 			params.ReplyParameters = &models.ReplyParameters{MessageID: dest.ReplyTo, AllowSendingWithoutReply: true}
+		}
+		if len(dest.Buttons) > 0 {
+			params.ReplyMarkup = buttons.Markup(dest.Buttons)
 		}
 		if parseMode != "" {
 			params.ParseMode = models.ParseMode(parseMode)

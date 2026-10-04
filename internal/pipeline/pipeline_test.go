@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/nickalie/nclaw/internal/buttons"
 	"github.com/nickalie/nclaw/internal/cli"
 	"github.com/nickalie/nclaw/internal/sendfile"
 )
@@ -39,11 +40,12 @@ type sendCall struct {
 	text      string
 	parseMode string
 	replyTo   int
+	buttons   buttons.Keyboard
 }
 
 func (m *mockSend) fn() SendFunc {
 	return func(_ context.Context, dest Dest, text, parseMode string) error {
-		m.calls = append(m.calls, sendCall{dest.ChatID, dest.ThreadID, text, parseMode, dest.ReplyTo})
+		m.calls = append(m.calls, sendCall{dest.ChatID, dest.ThreadID, text, parseMode, dest.ReplyTo, dest.Buttons})
 		return m.err
 	}
 }
@@ -533,4 +535,36 @@ func TestProcess_FailureHintIgnoredOnSuccess(t *testing.T) {
 
 	require.Len(t, ms.calls, 1)
 	assert.NotContains(t, ms.calls[0].text, "sign in again")
+}
+
+func TestProcess_ButtonsGoUnderTheLastChunkOnly(t *testing.T) {
+	ms := &mockSend{}
+	p := New(ms.fn(), sendfile.Senders{}, true)
+	kb := buttons.Reminder()
+
+	text := strings.Repeat("a", 4000) + "\n" + strings.Repeat("b", 100)
+	p.Process(context.Background(), &cli.Result{Text: text}, nil, Dest{ChatID: 1, ReplyTo: 9, Buttons: kb}, "/tmp", false)
+
+	require.Len(t, ms.calls, 2)
+	assert.Nil(t, ms.calls[0].buttons)
+	assert.Equal(t, 9, ms.calls[0].replyTo)
+	assert.Equal(t, kb, ms.calls[1].buttons)
+	assert.Zero(t, ms.calls[1].replyTo)
+}
+
+func TestProcess_ButtonsStayOnTheVisiblePartOfALongAnswer(t *testing.T) {
+	ms := &mockSend{}
+	var docs int
+	p := New(ms.fn(), sendfile.Senders{Doc: func(context.Context, int64, int, string, []byte, string) error {
+		docs++
+		return nil
+	}}, true)
+	kb := buttons.Choices([]string{"Да", "Нет"})
+
+	text := strings.Repeat(strings.Repeat("x", 100)+"\n", 200)
+	p.Process(context.Background(), &cli.Result{Text: text}, nil, Dest{ChatID: 1, Buttons: kb}, "/tmp", false)
+
+	require.Len(t, ms.calls, 1)
+	assert.Equal(t, kb, ms.calls[0].buttons)
+	assert.Equal(t, 1, docs)
 }
