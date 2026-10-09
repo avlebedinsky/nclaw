@@ -16,6 +16,9 @@ var (
 	_ cli.AuthProvider         = (*Provider)(nil)
 	_ cli.LoginProvider        = (*Provider)(nil)
 	_ cli.MemoryFileProvider   = (*Provider)(nil)
+	_ cli.ModelProvider        = (*Provider)(nil)
+	_ cli.AutoMemoryStore      = (*Provider)(nil)
+	_ cli.ContextProvider      = (*Provider)(nil)
 )
 
 // NewProvider creates a new Claude CLI provider.
@@ -60,6 +63,11 @@ func (p *Provider) MemoryFile() string {
 	return "CLAUDE.md"
 }
 
+// Models lists the model aliases a chat can switch to.
+func (p *Provider) Models() []string {
+	return []string{"opus", "sonnet", "haiku"}
+}
+
 // NativeSkills reports that the CLI loads skills from its own skills directory.
 func (p *Provider) NativeSkills() bool {
 	return true
@@ -68,6 +76,26 @@ func (p *Provider) NativeSkills() bool {
 // SessionSize returns the size of the latest session transcript for dir.
 func (p *Provider) SessionSize(dir string) (int64, bool) {
 	return SessionSize(dir)
+}
+
+// AutoMemoryDir returns where Claude keeps the auto memory of dir.
+func (p *Provider) AutoMemoryDir(dir string) (string, error) {
+	return AutoMemoryDir(dir)
+}
+
+// ClearAutoMemory moves the auto memory of dir aside.
+func (p *Provider) ClearAutoMemory(dir string) error {
+	return ClearAutoMemory(dir)
+}
+
+// ContextUsage reports how full the latest conversation of dir is.
+func (p *Provider) ContextUsage(dir string) (cli.ContextUsage, bool) {
+	return ContextUsage(dir)
+}
+
+// CompactPrompt is the CLI's slash command that compacts the conversation.
+func (p *Provider) CompactPrompt() string {
+	return "/compact"
 }
 
 // ArchiveSession archives the session history for dir so the next run starts fresh.

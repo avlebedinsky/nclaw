@@ -94,7 +94,7 @@ func TestExecuteBlocks_CreateWebhookFull(t *testing.T) {
 		`{"action":"create","description":"GitHub push events"}` +
 		"\n```\nDone!"
 	statusMsg := m.ExecuteBlocks(text, 100, 5)
-	assert.Contains(t, statusMsg, "[Webhook created: https://example.com/webhooks/")
+	assert.Contains(t, statusMsg, "[Вебхук создан: https://example.com/webhooks/")
 
 	display := blocks.StripAll(text)
 	assert.Contains(t, display, "Setting up.")
@@ -113,7 +113,7 @@ func TestExecuteBlocks_CreateMissingDescription(t *testing.T) {
 	m := setupTestManager(t)
 	text := "```nclaw:webhook\n{\"action\":\"create\"}\n```"
 	result := m.ExecuteBlocks(text, 100, 0)
-	assert.Contains(t, result, "Webhook error")
+	assert.Contains(t, result, "Ошибка вебхука")
 	assert.Contains(t, result, "create requires description")
 }
 
@@ -127,8 +127,8 @@ func TestExecuteBlocks_DeleteWebhook(t *testing.T) {
 		`{"action":"delete","webhook_id":"` + wh.ID + `"}` +
 		"\n```"
 	result := m.ExecuteBlocks(text, 100, 0)
-	assert.Contains(t, result, "[Webhook deleted: "+wh.ID+"]")
-	assert.NotContains(t, result, "Webhook error")
+	assert.Contains(t, result, "[Вебхук удалён: "+wh.ID+"]")
+	assert.NotContains(t, result, "Ошибка вебхука")
 
 	webhooks, err := m.List(100, 0)
 	require.NoError(t, err)
@@ -139,7 +139,7 @@ func TestExecuteBlocks_DeleteMissingID(t *testing.T) {
 	m := setupTestManager(t)
 	text := "```nclaw:webhook\n{\"action\":\"delete\"}\n```"
 	result := m.ExecuteBlocks(text, 100, 0)
-	assert.Contains(t, result, "Webhook error")
+	assert.Contains(t, result, "Ошибка вебхука")
 	assert.Contains(t, result, "delete requires webhook_id")
 }
 
@@ -147,7 +147,7 @@ func TestExecuteBlocks_ListEmpty(t *testing.T) {
 	m := setupTestManager(t)
 	text := "```nclaw:webhook\n{\"action\":\"list\"}\n```"
 	result := m.ExecuteBlocks(text, 100, 0)
-	assert.Contains(t, result, "[No webhooks registered]")
+	assert.Contains(t, result, "[Вебхуков нет]")
 }
 
 func TestExecuteBlocks_ListWithWebhooks(t *testing.T) {
@@ -169,14 +169,14 @@ func TestExecuteBlocks_InvalidJSON(t *testing.T) {
 	m := setupTestManager(t)
 	text := "```nclaw:webhook\n{bad json}\n```"
 	result := m.ExecuteBlocks(text, 100, 0)
-	assert.Contains(t, result, "Webhook error")
+	assert.Contains(t, result, "Ошибка вебхука")
 }
 
 func TestExecuteBlocks_UnknownAction(t *testing.T) {
 	m := setupTestManager(t)
 	text := "```nclaw:webhook\n{\"action\":\"explode\"}\n```"
 	result := m.ExecuteBlocks(text, 100, 0)
-	assert.Contains(t, result, "Webhook error")
+	assert.Contains(t, result, "Ошибка вебхука")
 	assert.Contains(t, result, "unknown action")
 }
 
@@ -192,7 +192,7 @@ func TestExecuteBlocks_CreateWebhook(t *testing.T) {
 		`{"action":"create","description":"test hook"}` +
 		"\n```\nmore"
 	result := m.ExecuteBlocks(text, 100, 0)
-	assert.Contains(t, result, "[Webhook created: https://example.com/webhooks/")
+	assert.Contains(t, result, "[Вебхук создан: https://example.com/webhooks/")
 
 	webhooks, err := m.List(100, 0)
 	require.NoError(t, err)
@@ -203,7 +203,7 @@ func TestExecuteBlocks_Error(t *testing.T) {
 	m := setupTestManager(t)
 	text := "```nclaw:webhook\n{bad json}\n```"
 	result := m.ExecuteBlocks(text, 100, 0)
-	assert.Contains(t, result, "[Webhook error:")
+	assert.Contains(t, result, "[Ошибка вебхука:")
 }
 
 func TestExecuteBlocks_MixedSuccessAndError(t *testing.T) {
@@ -212,8 +212,8 @@ func TestExecuteBlocks_MixedSuccessAndError(t *testing.T) {
 		`{"action":"create","description":"ok"}` +
 		"\n```\n```nclaw:webhook\n{bad}\n```"
 	result := m.ExecuteBlocks(text, 100, 0)
-	assert.Contains(t, result, "[Webhook created:")
-	assert.Contains(t, result, "[Webhook error:")
+	assert.Contains(t, result, "[Вебхук создан:")
+	assert.Contains(t, result, "[Ошибка вебхука:")
 }
 
 func TestCreate(t *testing.T) {
@@ -425,7 +425,7 @@ func TestExecuteBlocks_PauseTask(t *testing.T) {
 		`{"action":"pause","webhook_id":"some-id"}` +
 		"\n```"
 	result := m.ExecuteBlocks(text, 100, 0)
-	assert.Contains(t, result, "Webhook error")
+	assert.Contains(t, result, "Ошибка вебхука")
 	assert.Contains(t, result, "unknown action")
 }
 
@@ -437,7 +437,7 @@ func TestExecuteBlocks_ResumeTask(t *testing.T) {
 		`{"action":"resume","webhook_id":"some-id"}` +
 		"\n```"
 	result := m.ExecuteBlocks(text, 100, 0)
-	assert.Contains(t, result, "Webhook error")
+	assert.Contains(t, result, "Ошибка вебхука")
 	assert.Contains(t, result, "unknown action")
 }
 
@@ -449,7 +449,7 @@ func TestExecuteBlocks_CancelTask(t *testing.T) {
 		`{"action":"cancel","webhook_id":"some-id"}` +
 		"\n```"
 	result := m.ExecuteBlocks(text, 100, 0)
-	assert.Contains(t, result, "Webhook error")
+	assert.Contains(t, result, "Ошибка вебхука")
 	assert.Contains(t, result, "unknown action")
 }
 
@@ -460,7 +460,7 @@ func TestExecuteBlocks_DeleteWebhook_NotFound(t *testing.T) {
 		`{"action":"delete","webhook_id":"nonexistent-id"}` +
 		"\n```"
 	result := m.ExecuteBlocks(text, 100, 0)
-	assert.Contains(t, result, "Webhook error")
+	assert.Contains(t, result, "Ошибка вебхука")
 	assert.Contains(t, result, "webhook not found")
 }
 
@@ -476,7 +476,7 @@ func TestExecuteBlocks_DeleteWebhook_WrongChat(t *testing.T) {
 		`{"action":"delete","webhook_id":"` + wh.ID + `"}` +
 		"\n```"
 	result := m.ExecuteBlocks(text, 100, 0)
-	assert.Contains(t, result, "Webhook error")
+	assert.Contains(t, result, "Ошибка вебхука")
 	assert.Contains(t, result, "webhook not found")
 
 	// Verify it still exists.

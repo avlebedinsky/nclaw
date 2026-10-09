@@ -33,7 +33,7 @@ type SendFunc func(ctx context.Context, dest Dest, text, parseMode string) error
 
 const (
 	maxReplyChunks    = 3
-	longAnswerCaption = "📄 The full answer is in the file"
+	longAnswerCaption = "📄 Полный ответ — в файле"
 )
 
 // Pipeline orchestrates post-Claude response processing: block execution,
@@ -210,7 +210,7 @@ func (p *Pipeline) executeBlocks(
 	}
 
 	if !p.webhooksConfigured && blocks.Webhook.MatchString(result.Text) {
-		statusMsgs = append(statusMsgs, "[Webhooks are not configured on this instance]")
+		statusMsgs = append(statusMsgs, "[Вебхуки на этом боте не настроены]")
 	}
 
 	return statusMsgs

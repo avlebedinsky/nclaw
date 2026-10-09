@@ -1079,10 +1079,10 @@ func TestExecuteTask_FailureNamesTaskAndShowsOutput(t *testing.T) {
 
 	require.Len(t, *sent, 1)
 	msg := (*sent)[0]
-	assert.Contains(t, msg, "Scheduled task failed: remind about water")
+	assert.Contains(t, msg, "Задача по расписанию не выполнилась: remind about water")
 	assert.Contains(t, msg, "exit status 1")
 	assert.Contains(t, msg, "Failed to authenticate")
-	assert.NotContains(t, msg, "will not run again")
+	assert.NotContains(t, msg, "Больше она не запустится")
 }
 
 func TestExecuteTask_OnceFailureSaysItWillNotRepeat(t *testing.T) {
@@ -1096,7 +1096,7 @@ func TestExecuteTask_OnceFailureSaysItWillNotRepeat(t *testing.T) {
 	s.executeTask(task.ID)
 
 	require.Len(t, *sent, 1)
-	assert.Contains(t, (*sent)[0], "It will not run again.")
+	assert.Contains(t, (*sent)[0], "Больше она не запустится.")
 	got, err := db.GetTask(s.db, task.ID)
 	require.NoError(t, err)
 	assert.Equal(t, model.StatusFailed, got.Status)
@@ -1113,7 +1113,7 @@ func TestLoadTasks_DisablesUnloadableTaskAndTellsChat(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, model.StatusFailed, got.Status)
 	require.Len(t, *sent, 1)
-	assert.Contains(t, (*sent)[0], "could not be scheduled and was disabled: remind about water")
+	assert.Contains(t, (*sent)[0], "не удалось поставить в расписание, она отключена: remind about water")
 	assert.Contains(t, (*sent)[0], `unknown schedule type "weekly"`)
 }
 

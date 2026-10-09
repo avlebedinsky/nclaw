@@ -173,6 +173,7 @@ func setupBot(database *gorm.DB, provider cli.Provider) *app {
 		log.Fatal("scheduler: ", err)
 	}
 	h.Tasks = sched
+	h.SkillDirs = skillDirs()
 
 	webhookMgr := createWebhookManager(database, inv, queue)
 	p := buildPipeline(b, fileSenders, sched, webhookMgr)
@@ -237,11 +238,12 @@ func newLogins(provider cli.Provider, admin int64) *handler.Logins {
 }
 
 func signInHints(loginEnabled bool) (renew, failure string) {
-	const expired = "🔑 The bot's Claude sign-in has expired or was revoked. "
+	const expired = "🔑 Вход бота в Claude истёк или был отозван. "
 	if loginEnabled {
-		return "Send /login here to sign in again.", expired + "Send /login in the admin's private chat with the bot to sign in again."
+		return "Отправьте сюда /login, чтобы войти заново.",
+			expired + "Отправьте /login в личном чате администратора с ботом, чтобы войти заново."
 	}
-	const manual = "To sign in again, run claude auth login inside the bot's container."
+	const manual = "Чтобы войти заново, выполните claude auth login в контейнере бота."
 	return manual, expired + manual
 }
 
@@ -279,6 +281,24 @@ func installBundledSkills() {
 			log.Printf("skills: %v", err)
 		}
 		logSkillReport(dest, &rep)
+	}
+}
+
+func skillDirs() func(string) (string, []string) {
+	claudeDir, err := claude.ConfigDir()
+	if err != nil {
+		log.Printf("skills: %v", err)
+		return nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		log.Printf("skills: %v", err)
+		return nil
+	}
+	backend := config.CLI()
+	global := skills.Dirs(backend, claudeDir, home)
+	return func(workDir string) (string, []string) {
+		return skills.LocalDir(backend, workDir), global
 	}
 }
 
@@ -406,7 +426,7 @@ func sendStartupNotifications(b *bot.Bot) {
 		return
 	}
 
-	text := "nclaw bot started\n" + version.String()
+	text := "Бот nclaw запущен\n" + version.String()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()

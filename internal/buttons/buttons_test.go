@@ -19,6 +19,9 @@ func TestParse(t *testing.T) {
 		"t:p:task-1a": {Kind: TaskAction, Action: TaskPause, TaskID: "task-1a"},
 		"t:r:task-1a": {Kind: TaskAction, Action: TaskResume, TaskID: "task-1a"},
 		"t:c:task-1a": {Kind: TaskAction, Action: TaskCancel, TaskID: "task-1a"},
+		"forget":      {Kind: ForgetMemory},
+		"compact":     {Kind: Compact},
+		"reset":       {Kind: NewConversation},
 	}
 	for data, want := range cases {
 		assert.Equal(t, want, Parse(data), data)
@@ -48,7 +51,7 @@ func TestReminderButtonsDecodeToTheirActions(t *testing.T) {
 	kb := Reminder()
 
 	require.Len(t, kb, 1)
-	labels := []string{"✅ Done", "+15 min", "+1 h", "Tomorrow"}
+	labels := []string{"✅ Готово", "+15 мин", "+1 час", "Завтра"}
 	kinds := []Kind{Done, Snooze, Snooze, Snooze}
 	for i, b := range kb[0] {
 		assert.Equal(t, labels[i], b.Text)
@@ -58,8 +61,8 @@ func TestReminderButtonsDecodeToTheirActions(t *testing.T) {
 }
 
 func TestProgress_AnswerNewOnlyWithPendingMessages(t *testing.T) {
-	assert.Equal(t, Keyboard{{{Text: "⏹ Stop", Data: "s"}}}, Progress(0))
-	assert.Equal(t, Keyboard{{{Text: "⏹ Stop", Data: "s"}, {Text: "⏭ Answer new (2)", Data: "n"}}}, Progress(2))
+	assert.Equal(t, Keyboard{{{Text: "⏹ Стоп", Data: "s"}}}, Progress(0))
+	assert.Equal(t, Keyboard{{{Text: "⏹ Стоп", Data: "s"}, {Text: "⏭ Ответить на новые (2)", Data: "n"}}}, Progress(2))
 }
 
 func TestTask(t *testing.T) {
@@ -82,4 +85,17 @@ func TestMarkupRoundTripAndLabel(t *testing.T) {
 	assert.Empty(t, back.Label("c:5"))
 	assert.Nil(t, FromMarkup(nil))
 	assert.Empty(t, Markup(nil).InlineKeyboard)
+}
+
+func TestModels_TicksTheCurrentChoiceTwoPerRow(t *testing.T) {
+	kb := Models([]string{"opus", "sonnet", "haiku"}, "sonnet")
+
+	assert.Equal(t, Keyboard{
+		{{Text: "Opus", Data: "m:opus"}, {Text: "✓ Sonnet", Data: "m:sonnet"}},
+		{{Text: "Haiku", Data: "m:haiku"}, {Text: "По умолчанию", Data: "m:"}},
+	}, kb)
+	assert.Equal(t, "✓ По умолчанию", Models([]string{"opus"}, "")[0][1].Text)
+	assert.Equal(t, Press{Kind: Model, Model: "opus"}, Parse("m:opus"))
+	assert.Equal(t, Press{Kind: Model}, Parse("m:"))
+	assert.Equal(t, "по умолчанию", ModelName(""))
 }

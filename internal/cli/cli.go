@@ -74,6 +74,31 @@ type MemoryFileProvider interface {
 	MemoryFile() string
 }
 
+// AutoMemoryStore is implemented by providers whose CLI keeps an automatic memory per
+// working directory.
+type AutoMemoryStore interface {
+	AutoMemoryDir(dir string) (string, error)
+	// ClearAutoMemory moves the automatic memory of dir aside, so the next run starts without it.
+	ClearAutoMemory(dir string) error
+}
+
+// ContextUsage is how full a conversation's context was at its last reply.
+type ContextUsage struct {
+	Tokens int
+	// CompactAt is the size at which the CLI compacts the conversation by itself; 0 when unknown.
+	CompactAt int
+	// Model is the model that wrote the last reply.
+	Model string
+}
+
+// ContextProvider is implemented by providers that can tell how full a conversation's
+// context is and compact it on request.
+type ContextProvider interface {
+	ContextUsage(dir string) (ContextUsage, bool)
+	// CompactPrompt is the prompt that makes the CLI compact the conversation.
+	CompactPrompt() string
+}
+
 // AuthProvider is implemented by providers whose stored sign-in expires on a known date.
 type AuthProvider interface {
 	// AuthExpiry returns when the stored sign-in stops working; ok is false when it is unknown.
@@ -94,6 +119,17 @@ type LoginSession interface {
 	// Submit passes the code to the sign-in and waits for its outcome.
 	Submit(code string) error
 	Cancel()
+}
+
+// ModelProvider is implemented by providers whose runs can use a model chosen per chat.
+type ModelProvider interface {
+	// Models lists the model names or aliases a chat can switch to.
+	Models() []string
+}
+
+// ModelClient is implemented by clients that can run a given model.
+type ModelClient interface {
+	UseModel(model string) Client
 }
 
 // EphemeralClient is implemented by clients that can run without persisting the

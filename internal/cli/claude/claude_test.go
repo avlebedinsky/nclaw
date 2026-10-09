@@ -584,3 +584,12 @@ func TestOnPartialText_RequestsPartialMessages(t *testing.T) {
 	plain.prepare("-p")
 	assert.NotContains(t, plain.bin.Args(), "--include-partial-messages")
 }
+
+func TestUseModel_PassesTheModelFlag(t *testing.T) {
+	c := New()
+	assert.Same(t, c, c.UseModel("haiku"))
+	c.bin.Reset()
+	c.prepareModel()
+	assert.Contains(t, c.bin.Args(), "haiku")
+	assert.Equal(t, []string{"opus", "sonnet", "haiku"}, NewProvider().Models())
+}

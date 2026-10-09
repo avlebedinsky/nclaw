@@ -25,8 +25,10 @@ type fakeClient struct {
 	mode         string
 	result       *cli.Result
 	err          error
+	model        string
 }
 
+func (c *fakeClient) UseModel(m string) cli.Client       { c.model = m; return c }
 func (c *fakeClient) Dir(dir string) cli.Client          { c.dir = dir; return c }
 func (c *fakeClient) Context(context.Context) cli.Client { return c }
 func (c *fakeClient) SkipPermissions() cli.Client {
@@ -409,4 +411,61 @@ func TestRun_PrivateChatTopicGetsSharedMemory(t *testing.T) {
 
 	assert.Contains(t, client.systemPrompt, "This is a private Telegram chat.")
 	assert.Contains(t, client.systemPrompt, filepath.Join(inv.ChatDir(375321681, 0), "CLAUDE.md"))
+}
+
+type modelProvider struct {
+	fakeProvider
+}
+
+func (p *modelProvider) Models() []string { return []string{"opus", "sonnet"} }
+
+func TestSetModel_IsUsedByTheChatsRunsOnly(t *testing.T) {
+	client := &fakeClient{result: &cli.Result{Text: "ok"}}
+	inv := newTestInvoker(t, &modelProvider{fakeProvider{client: client}}, Options{})
+	assert.Equal(t, []string{"opus", "sonnet"}, inv.Models())
+	assert.Empty(t, inv.Model(100, 5))
+
+	require.NoError(t, inv.SetModel(100, 5, "opus"))
+	assert.Equal(t, "opus", inv.Model(100, 5))
+	inv.Run(context.Background(), Request{ChatID: 100, ThreadID: 5, Prompt: "hi"})
+	assert.Equal(t, "opus", client.model)
+
+	client.model = ""
+	inv.Run(context.Background(), Request{ChatID: 100, ThreadID: 6, Prompt: "hi"})
+	assert.Empty(t, client.model)
+
+	require.NoError(t, inv.SetModel(100, 5, ""))
+	require.NoError(t, inv.SetModel(100, 5, ""))
+	assert.Empty(t, inv.Model(100, 5))
+	assert.Nil(t, newTestInvoker(t, &fakeProvider{client: client}, Options{}).Models())
+}
+
+type contextProvider struct {
+	fakeProvider
+}
+
+func (p *contextProvider) ContextUsage(string) (cli.ContextUsage, bool) {
+	return cli.ContextUsage{Tokens: 1200}, true
+}
+func (p *contextProvider) CompactPrompt() string { return "/compact" }
+
+func TestCompact_SendsTheCommandWithoutTheTimeHeader(t *testing.T) {
+	client := &fakeClient{result: &cli.Result{}}
+	inv := newTestInvoker(t, &contextProvider{fakeProvider{client: client}}, Options{})
+
+	require.NoError(t, inv.Compact(context.Background(), 100, 5))
+
+	assert.Equal(t, "/compact", client.query)
+	assert.Equal(t, "continue", client.mode)
+	usage, ok := inv.ContextUsage(100, 5)
+	assert.True(t, ok)
+	assert.Equal(t, 1200, usage.Tokens)
+}
+
+func TestCompact_UnsupportedBackend(t *testing.T) {
+	inv := newTestInvoker(t, &fakeProvider{client: &fakeClient{}}, Options{})
+
+	require.Error(t, inv.Compact(context.Background(), 100, 5))
+	_, ok := inv.ContextUsage(100, 5)
+	assert.False(t, ok)
 }

@@ -147,3 +147,22 @@ func TestArchiveSession_KeepsNewestArchives(t *testing.T) {
 	assert.NotContains(t, matches, projectDir+".archived-1700000002")
 	assert.Contains(t, matches, projectDir+".archived-1700000004")
 }
+
+func TestClearAutoMemory_MovesTheMemoryAside(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	work := t.TempDir()
+	mem, err := AutoMemoryDir(work)
+	require.NoError(t, err)
+	assert.Equal(t, "memory", filepath.Base(mem))
+	require.NoError(t, ClearAutoMemory(work))
+	require.NoError(t, os.MkdirAll(mem, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(mem, "MEMORY.md"), []byte("- fact"), 0o644))
+
+	require.NoError(t, ClearAutoMemory(work))
+
+	assert.NoDirExists(t, mem)
+	moved, err := filepath.Glob(mem + ".cleared-*")
+	require.NoError(t, err)
+	require.Len(t, moved, 1)
+	assert.FileExists(t, filepath.Join(moved[0], "MEMORY.md"))
+}

@@ -4,6 +4,7 @@ package invoker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -24,7 +25,10 @@ const (
 	Isolated
 )
 
-const freshSessionMarker = ".nclaw-new-session"
+const (
+	freshSessionMarker = ".nclaw-new-session"
+	modelFile          = ".nclaw-model"
+)
 
 // IsolatedDirName is the chat subdirectory where isolated runs execute, so their
 // sessions never become the chat's most recent conversation.
@@ -60,6 +64,7 @@ type Request struct {
 	Prompt    string
 	Mode      Mode
 	Configure func(cli.Client)
+	Command   bool
 }
 
 // Outcome is the result of a run. Result is never nil.
@@ -124,6 +129,96 @@ func (i *Invoker) MaxSessionBytes() int64 {
 	return i.opts.MaxSessionBytes
 }
 
+// HasMemory reports whether the backend keeps a memory nclaw can show: an automatic one
+// or instruction files it loads from the chat directories.
+func (i *Invoker) HasMemory() bool {
+	_, auto := i.provider.(cli.AutoMemoryStore)
+	_, files := i.provider.(cli.MemoryFileProvider)
+	return auto || files
+}
+
+// AutoMemoryDir returns the directory of a chat/thread's automatic memory; ok is false when
+// the backend keeps none.
+func (i *Invoker) AutoMemoryDir(chatID int64, threadID int) (string, bool) {
+	store, ok := i.provider.(cli.AutoMemoryStore)
+	if !ok {
+		return "", false
+	}
+	dir, err := store.AutoMemoryDir(i.ChatDir(chatID, threadID))
+	return dir, err == nil
+}
+
+// ClearAutoMemory moves a chat/thread's automatic memory aside.
+func (i *Invoker) ClearAutoMemory(chatID int64, threadID int) error {
+	store, ok := i.provider.(cli.AutoMemoryStore)
+	if !ok {
+		return nil
+	}
+	return store.ClearAutoMemory(i.ChatDir(chatID, threadID))
+}
+
+// MemoryFiles returns the instruction files the backend loads for a chat/thread: the one
+// shared by the whole chat and the thread's own; both are "" when it loads none.
+func (i *Invoker) MemoryFiles(chatID int64, threadID int) (shared, own string) {
+	mp, ok := i.provider.(cli.MemoryFileProvider)
+	if !ok {
+		return "", ""
+	}
+	return filepath.Join(i.ChatDir(chatID, 0), mp.MemoryFile()), filepath.Join(i.ChatDir(chatID, threadID), mp.MemoryFile())
+}
+
+// ContextUsage reports how full a chat/thread's conversation is, when the backend can tell.
+func (i *Invoker) ContextUsage(chatID int64, threadID int) (cli.ContextUsage, bool) {
+	cp, ok := i.provider.(cli.ContextProvider)
+	if !ok {
+		return cli.ContextUsage{}, false
+	}
+	return cp.ContextUsage(i.ChatDir(chatID, threadID))
+}
+
+// Compact makes the backend compact a chat/thread's conversation. Callers serialize it with
+// the chat's runs.
+func (i *Invoker) Compact(ctx context.Context, chatID int64, threadID int) error {
+	cp, ok := i.provider.(cli.ContextProvider)
+	if !ok {
+		return errors.New("this backend cannot compact a conversation")
+	}
+	return i.Run(ctx, Request{ChatID: chatID, ThreadID: threadID, Prompt: cp.CompactPrompt(), Command: true}).Err
+}
+
+// Models lists the models a chat can switch to; nil when the backend offers no choice.
+func (i *Invoker) Models() []string {
+	if mp, ok := i.provider.(cli.ModelProvider); ok {
+		return mp.Models()
+	}
+	return nil
+}
+
+// Model returns the model chosen for a chat/thread, or "" for the backend's default.
+func (i *Invoker) Model(chatID int64, threadID int) string {
+	data, err := os.ReadFile(filepath.Join(i.ChatDir(chatID, threadID), modelFile))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+// SetModel chooses the model for a chat/thread; "" returns it to the backend's default.
+func (i *Invoker) SetModel(chatID int64, threadID int, model string) error {
+	dir := i.ChatDir(chatID, threadID)
+	path := filepath.Join(dir, modelFile)
+	if model == "" {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(model+"\n"), 0o644)
+}
+
 // Run executes one CLI invocation for the request. Callers serialize runs per chat.
 func (i *Invoker) Run(ctx context.Context, req Request) Outcome {
 	out := i.dirs(req)
@@ -142,8 +237,7 @@ func (i *Invoker) Run(ctx context.Context, req Request) Outcome {
 	runCtx, cancel := i.withTimeout(ctx)
 	defer cancel()
 
-	client := i.provider.NewClient().Context(runCtx).Dir(out.Dir).SkipPermissions().
-		AppendSystemPrompt(i.systemPrompt(req.ChatID, req.ThreadID))
+	client := i.newClient(runCtx, req, out.Dir)
 	if req.Configure != nil {
 		req.Configure(client)
 	}
@@ -157,6 +251,17 @@ func (i *Invoker) Run(ctx context.Context, req Request) Outcome {
 		log.Printf("invoker: %s error in dir=%s: %v", i.provider.Name(), out.Dir, out.Err)
 	}
 	return out
+}
+
+func (i *Invoker) newClient(ctx context.Context, req Request, dir string) cli.Client {
+	client := i.provider.NewClient().Context(ctx).Dir(dir).SkipPermissions().
+		AppendSystemPrompt(i.systemPrompt(req.ChatID, req.ThreadID))
+	if model := i.Model(req.ChatID, req.ThreadID); model != "" {
+		if mc, ok := client.(cli.ModelClient); ok {
+			client = mc.UseModel(model)
+		}
+	}
+	return client
 }
 
 func (i *Invoker) withTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
@@ -175,6 +280,9 @@ func (i *Invoker) dirs(req Request) Outcome {
 }
 
 func (i *Invoker) execute(client cli.Client, req Request, out Outcome) (*cli.Result, error) {
+	if req.Command {
+		return client.Continue(req.Prompt)
+	}
 	if req.Mode != Isolated {
 		return i.continueOrStart(client, out.Dir, req.Prompt)
 	}

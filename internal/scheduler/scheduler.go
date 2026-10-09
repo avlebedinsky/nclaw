@@ -117,7 +117,7 @@ func (s *Scheduler) disableUnloadable(task *model.ScheduledTask, err error) {
 	if s.pipeline == nil {
 		return
 	}
-	text := fmt.Sprintf("⚠️ A scheduled task could not be scheduled and was disabled: %s\n%v", truncate(task.Prompt, 80), err)
+	text := fmt.Sprintf("⚠️ Задачу не удалось поставить в расписание, она отключена: %s\n%v", truncate(task.Prompt, 80), err)
 	s.deliver(pipeline.Dest{ChatID: task.ChatID, ThreadID: task.ThreadID}, &cli.Result{Text: text}, nil, "")
 }
 
@@ -532,9 +532,9 @@ func liveTasks(database *gorm.DB, chatID int64, threadID int) ([]model.Scheduled
 }
 
 func failureResult(task *model.ScheduledTask, result *cli.Result, runErr error) *cli.Result {
-	text := fmt.Sprintf("⚠️ Scheduled task failed: %s\n%v", truncate(task.Prompt, 80), runErr)
+	text := fmt.Sprintf("⚠️ Задача по расписанию не выполнилась: %s\n%v", truncate(task.Prompt, 80), runErr)
 	if task.ScheduleType == model.ScheduleOnce {
-		text += "\nIt will not run again."
+		text += "\nБольше она не запустится."
 	}
 	if result != nil && strings.TrimSpace(result.Text) != "" {
 		text += "\n\n" + strings.TrimSpace(result.Text)

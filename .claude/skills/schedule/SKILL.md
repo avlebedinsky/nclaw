@@ -32,7 +32,7 @@ Fields:
 - `context`: `"group"` (default), `"isolated"` or `"notify"` (optional)
 
 Context modes:
-- `"notify"`: No AI run at all — when the task fires, the `prompt` text is sent to the chat as is, instantly, even while you are busy with another request. Use it for plain reminders whose text is already known ("remind me to…", "wake me at…"). Write the prompt as the final message in the user's language, e.g. `"⏰ Call the dentist"`. The reminder arrives with Done, +15 min, +1 h and Tomorrow buttons: the user can snooze it with one tap, so don't add your own snooze instructions.
+- `"notify"`: No AI run at all — when the task fires, the `prompt` text is sent to the chat as is, instantly, even while you are busy with another request. Use it for plain reminders whose text is already known ("remind me to…", "wake me at…"). Write the prompt as the final message in the user's language, e.g. `"⏰ Call the dentist"`. The reminder arrives with «✅ Готово», «+15 мин», «+1 час» and «Завтра» buttons: the user can snooze it with one tap, so don't add your own snooze instructions.
 - `"group"`: Task runs in the conversation's session (has chat history). Use for tasks needing context.
 - `"isolated"`: Task runs in a fresh session. Use for self-contained tasks. Include all needed context in the prompt.
 

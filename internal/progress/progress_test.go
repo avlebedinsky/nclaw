@@ -75,7 +75,7 @@ func TestReporter_FirstToolSendsImmediately(t *testing.T) {
 	r.OnTool(cli.ToolEvent{Name: "Bash", Detail: "npm test"})
 
 	require.Eventually(t, func() bool { return api.count("send") == 1 }, 2*time.Second, 5*time.Millisecond)
-	assert.Contains(t, api.snapshot()[0].text, "🔧 Bash: npm test\nstep 1 · ")
+	assert.Contains(t, api.snapshot()[0].text, "🔧 Bash: npm test\nшаг 1 · ")
 	r.Finish(context.Background())
 	assert.Equal(t, call{op: "delete", msgID: 7}, api.snapshot()[1])
 }

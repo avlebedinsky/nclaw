@@ -22,6 +22,7 @@ import (
 	"github.com/nickalie/nclaw/internal/invoker"
 	"github.com/nickalie/nclaw/internal/pipeline"
 	"github.com/nickalie/nclaw/internal/progress"
+	"github.com/nickalie/nclaw/internal/ru"
 )
 
 const maxSpeechSeconds = 600
@@ -42,6 +43,7 @@ type Handler struct {
 	Logins      *Logins
 	Buttons     ButtonAPI
 	Tasks       TaskManager
+	SkillDirs   func(workDir string) (local string, global []string)
 
 	cutOff sync.Map
 }
@@ -239,13 +241,13 @@ func withErrorText(result *cli.Result, err error) *cli.Result {
 	case err == nil:
 		return result
 	case errors.As(err, &timeout):
-		notice := fmt.Sprintf("⏱ Stopped: the run took longer than %s.", timeout.After)
+		notice := "⏱ Остановлено: ответ готовился дольше " + ru.Duration(timeout.After) + "."
 		text := strings.TrimSpace(result.Text + "\n\n" + notice)
 		return &cli.Result{Text: text, FullText: result.FullText}
 	case result.Text != "":
 		return result
 	default:
-		text := "error: " + err.Error()
+		text := "Ошибка: " + err.Error()
 		return &cli.Result{Text: text, FullText: text}
 	}
 }

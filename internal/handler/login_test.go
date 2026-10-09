@@ -87,7 +87,7 @@ func TestLogin_SubmitsNextMessageAsCode(t *testing.T) {
 
 	h.Default(context.Background(), nil, chatMessage("abc#def"))
 	msgs = waitSent(t, sent, 2)
-	assert.Equal(t, "✅ Signed in.\nClaude sign-in: valid until Sun 1 Nov 18:00 MSK (29 days left).", msgs[1])
+	assert.Equal(t, "✅ Вход выполнен.\nClaude sign-in: valid until Sun 1 Nov 18:00 MSK (29 days left).", msgs[1])
 	assert.Equal(t, []string{"abc#def"}, lp.session.submitted())
 	assert.Equal(t, 0, h.Queue.Snapshot(testKey).PendingUser)
 	require.Eventually(t, func() bool { return lp.ctx.Err() != nil }, time.Second, 10*time.Millisecond)
@@ -105,7 +105,7 @@ func TestLogin_ReportsRejectedCode(t *testing.T) {
 	h.Default(context.Background(), nil, chatMessage("bad"))
 
 	msgs := waitSent(t, sent, 2)
-	assert.Equal(t, "❌ Sign-in failed: claude: Login failed: Request failed with status code 400\nSend /login to try again.", msgs[1])
+	assert.Equal(t, "❌ Войти не удалось: claude: Login failed: Request failed with status code 400\nОтправьте /login, чтобы попробовать ещё раз.", msgs[1])
 }
 
 func TestLogin_OnlyInAdminChat(t *testing.T) {
@@ -116,7 +116,7 @@ func TestLogin_OnlyInAdminChat(t *testing.T) {
 	h.Command(context.Background(), nil, commandUpdate("/login"))
 
 	msgs := waitSent(t, sent, 1)
-	assert.Equal(t, "/login works only in the admin's private chat with the bot.", msgs[0])
+	assert.Equal(t, "/login работает только в личном чате администратора с ботом.", msgs[0])
 	assert.Nil(t, lp.ctx)
 }
 
@@ -127,7 +127,7 @@ func TestLogin_StartFailure(t *testing.T) {
 	h.Command(context.Background(), nil, commandUpdate("/login"))
 
 	msgs := waitSent(t, sent, 1)
-	assert.Equal(t, "Could not start the sign-in: claude: login printed no link in time", msgs[0])
+	assert.Equal(t, "Не удалось начать вход: claude: login printed no link in time", msgs[0])
 	h.Default(context.Background(), nil, chatMessage("abc#def"))
 	assert.Equal(t, 1, h.Queue.Snapshot(testKey).PendingUser)
 }
@@ -142,7 +142,7 @@ func TestLogin_ExpiresAfterWindow(t *testing.T) {
 	h.Command(context.Background(), nil, commandUpdate("/login"))
 
 	msgs := waitSent(t, sent, 2)
-	assert.Contains(t, msgs[1], "not finished in time")
+	assert.Contains(t, msgs[1], "не завершён вовремя")
 	h.Default(context.Background(), nil, chatMessage("abc#def"))
 	assert.Empty(t, lp.session.submitted())
 }

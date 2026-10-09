@@ -560,7 +560,10 @@ type mockClient struct {
 	contResult   *cli.Result
 	contErr      error
 	lastQuery    string
+	model        string
 }
+
+func (m *mockClient) UseModel(model string) cli.Client { m.model = model; return m }
 
 func (m *mockClient) Dir(dir string) cli.Client              { m.dir = dir; return m }
 func (m *mockClient) Context(context.Context) cli.Client     { return m }
@@ -792,7 +795,7 @@ func TestRunBatch_CLIError(t *testing.T) {
 	h.RunBatch(context.Background(), testKey, []Inbound{{text: "hello"}})
 
 	require.Len(t, sent, 1)
-	assert.Contains(t, sent[0], "error: boom")
+	assert.Contains(t, sent[0], "Ошибка: boom")
 }
 
 func TestRunBatch_CLIErrorKeepsPartialOutput(t *testing.T) {
@@ -1014,9 +1017,9 @@ func TestWithErrorText(t *testing.T) {
 
 	assert.Equal(t, "ok", withErrorText(&cli.Result{Text: "ok"}, nil).Text)
 	assert.Equal(t, "partial", withErrorText(&cli.Result{Text: "partial"}, errors.New("x")).Text)
-	assert.Equal(t, "error: boom", withErrorText(&cli.Result{}, errors.New("boom")).Text)
-	assert.Equal(t, "⏱ Stopped: the run took longer than 1h0m0s.", withErrorText(&cli.Result{}, timeout).Text)
-	assert.Equal(t, "half done\n\n⏱ Stopped: the run took longer than 1h0m0s.", withErrorText(&cli.Result{Text: "half done"}, timeout).Text)
+	assert.Equal(t, "Ошибка: boom", withErrorText(&cli.Result{}, errors.New("boom")).Text)
+	assert.Equal(t, "⏱ Остановлено: ответ готовился дольше 1 ч.", withErrorText(&cli.Result{}, timeout).Text)
+	assert.Equal(t, "half done\n\n⏱ Остановлено: ответ готовился дольше 1 ч.", withErrorText(&cli.Result{Text: "half done"}, timeout).Text)
 }
 
 type progressClient struct {
@@ -1305,7 +1308,7 @@ func TestStopGeneration_StopsTheChat(t *testing.T) {
 	waitQueue(t, h)
 
 	require.Eventually(t, func() bool { return len(sent.all()) == 1 }, 5*time.Second, 10*time.Millisecond)
-	assert.Contains(t, sent.all()[0], "⏹ Stopped your request")
+	assert.Contains(t, sent.all()[0], "⏹ Остановлено через")
 }
 
 func TestAllowChat_PassesStopButtonFromWhitelistedChat(t *testing.T) {

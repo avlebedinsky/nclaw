@@ -39,7 +39,7 @@ func (s *Scheduler) ExecuteBlocks(text string, chatID int64, threadID int) strin
 	}
 
 	if len(errs) > 0 {
-		return "[Schedule error: " + strings.Join(errs, "; ") + "]"
+		return "[Ошибка расписания: " + strings.Join(errs, "; ") + "]"
 	}
 	return ""
 }

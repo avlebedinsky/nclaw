@@ -46,18 +46,18 @@ func TestCheck_WarnsOncePerThreshold(t *testing.T) {
 	w.Check(ctx)
 	w.Check(ctx)
 	require.Len(t, f.sent, 1)
-	assert.Equal(t, "⚠️ The bot's Claude sign-in expires in 4 days (Fri 9 Oct 12:00 UTC). Send /login.", f.sent[0])
+	assert.Equal(t, "⚠️ Вход бота в Claude истекает через 4 дня (пт 9 окт 12:00 UTC). Send /login.", f.sent[0])
 
 	f.now = f.expiry.Add(-20 * time.Hour)
 	w.Check(ctx)
 	require.Len(t, f.sent, 2)
-	assert.Contains(t, f.sent[1], "expires in 20 hours")
+	assert.Contains(t, f.sent[1], "истекает через 20 часов")
 
 	f.now = f.expiry.Add(time.Minute)
 	w.Check(ctx)
 	w.Check(ctx)
 	require.Len(t, f.sent, 3)
-	assert.Equal(t, "⛔ The bot's Claude sign-in expired on Fri 9 Oct 12:00 UTC, so its replies will fail. Send /login.", f.sent[2])
+	assert.Equal(t, "⛔ Вход бота в Claude истёк пт 9 окт 12:00 UTC, ответы будут приходить с ошибкой. Send /login.", f.sent[2])
 }
 
 func TestCheck_SkipsLevelsAfterLongPause(t *testing.T) {
@@ -69,7 +69,7 @@ func TestCheck_SkipsLevelsAfterLongPause(t *testing.T) {
 	w.Check(context.Background())
 
 	require.Len(t, f.sent, 1)
-	assert.Contains(t, f.sent[0], "expires in 1 hour")
+	assert.Contains(t, f.sent[0], "истекает через 1 час")
 }
 
 func TestCheck_NewSignInResetsWarnings(t *testing.T) {
@@ -84,7 +84,7 @@ func TestCheck_NewSignInResetsWarnings(t *testing.T) {
 	w.Check(context.Background())
 
 	require.Len(t, f.sent, 2)
-	assert.Contains(t, f.sent[1], "expires in 3 days")
+	assert.Contains(t, f.sent[1], "истекает через 3 дня")
 }
 
 func TestCheck_RetriesAfterFailedNotify(t *testing.T) {
@@ -116,10 +116,10 @@ func TestCheck_UnknownExpiryIsSilent(t *testing.T) {
 func TestStatus(t *testing.T) {
 	f := newFixture()
 	w := newWatcher(f)
-	assert.Equal(t, "Claude sign-in: valid until Fri 9 Oct 12:00 UTC (6 days left).", w.Status())
+	assert.Equal(t, "Вход в Claude действует до пт 9 окт 12:00 UTC (осталось 6 дней).", w.Status())
 
 	f.now = f.expiry.Add(time.Hour)
-	assert.Equal(t, "Claude sign-in: expired on Fri 9 Oct 12:00 UTC.", w.Status())
+	assert.Equal(t, "Вход в Claude истёк пт 9 окт 12:00 UTC.", w.Status())
 }
 
 func TestRun_ChecksAtStartAndStopsWithContext(t *testing.T) {
@@ -144,10 +144,10 @@ func TestRun_ChecksAtStartAndStopsWithContext(t *testing.T) {
 }
 
 func TestHumanDuration(t *testing.T) {
-	assert.Equal(t, "5 days", humanDuration(5*day+3*time.Hour))
-	assert.Equal(t, "1 day", humanDuration(day+time.Hour))
-	assert.Equal(t, "23 hours", humanDuration(23*time.Hour+59*time.Minute))
-	assert.Equal(t, "1 hour", humanDuration(90*time.Minute))
-	assert.Equal(t, "5 minutes", humanDuration(5*time.Minute+30*time.Second))
-	assert.Equal(t, "1 minute", humanDuration(10*time.Second))
+	assert.Equal(t, "5 дней", humanDuration(5*day+3*time.Hour))
+	assert.Equal(t, "1 день", humanDuration(day+time.Hour))
+	assert.Equal(t, "23 часа", humanDuration(23*time.Hour+59*time.Minute))
+	assert.Equal(t, "1 час", humanDuration(90*time.Minute))
+	assert.Equal(t, "5 мин", humanDuration(5*time.Minute+30*time.Second))
+	assert.Equal(t, "1 мин", humanDuration(10*time.Second))
 }

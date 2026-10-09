@@ -4,6 +4,7 @@ package buttons
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -33,6 +34,10 @@ const (
 	Stop
 	AnswerNew
 	TaskAction
+	Model
+	ForgetMemory
+	Compact
+	NewConversation
 )
 
 // Task actions carried by TaskAction buttons.
@@ -49,6 +54,7 @@ type Press struct {
 	After  time.Duration
 	Action string
 	TaskID string
+	Model  string
 }
 
 const (
@@ -58,8 +64,11 @@ const (
 
 var (
 	snoozes     = []time.Duration{15 * time.Minute, time.Hour, 24 * time.Hour}
-	snoozeLabel = map[time.Duration]string{15 * time.Minute: "+15 min", time.Hour: "+1 h", 24 * time.Hour: "Tomorrow"}
+	snoozeLabel = map[time.Duration]string{15 * time.Minute: "+15 мин", time.Hour: "+1 час", 24 * time.Hour: "Завтра"}
 	taskCodes   = map[string]string{TaskPause: "p", TaskResume: "r", TaskCancel: "c"}
+	plainKinds  = map[string]Kind{
+		"d": Done, "s": Stop, "n": AnswerNew, "forget": ForgetMemory, "compact": Compact, "reset": NewConversation,
+	}
 )
 
 // Choices lays out answer options: two per row when every label is short, else one per row.
@@ -85,7 +94,7 @@ func Choices(labels []string) Keyboard {
 // Reminder returns the buttons of a reminder: done, and snooze for 15 minutes, an hour or a day.
 func Reminder() Keyboard {
 	row := make([]Button, 0, 1+len(snoozes))
-	row = append(row, Button{Text: "✅ Done", Data: "d"})
+	row = append(row, Button{Text: "✅ Готово", Data: "d"})
 	for _, d := range snoozes {
 		row = append(row, Button{Text: snoozeLabel[d], Data: fmt.Sprintf("z:%d", int(d.Minutes()))})
 	}
@@ -95,9 +104,9 @@ func Reminder() Keyboard {
 // Progress returns the buttons of a run's status message; pending is the number of
 // messages that arrived while the run was going on.
 func Progress(pending int) Keyboard {
-	row := []Button{{Text: "⏹ Stop", Data: "s"}}
+	row := []Button{{Text: "⏹ Стоп", Data: "s"}}
 	if pending > 0 {
-		row = append(row, Button{Text: fmt.Sprintf("⏭ Answer new (%d)", pending), Data: "n"})
+		row = append(row, Button{Text: fmt.Sprintf("⏭ Ответить на новые (%d)", pending), Data: "n"})
 	}
 	return Keyboard{row}
 }
@@ -109,6 +118,48 @@ func Task(n int, taskID string, paused bool) []Button {
 		toggle = Button{Text: fmt.Sprintf("▶️ %d", n), Data: "t:r:" + taskID}
 	}
 	return []Button{toggle, {Text: fmt.Sprintf("🗑 %d", n), Data: "t:c:" + taskID}}
+}
+
+// Models returns a button per model plus one for the backend's default, two per row,
+// with the current choice ticked; current is "" for the default.
+func Models(names []string, current string) Keyboard {
+	var kb Keyboard
+	for i, m := range append(slices.Clone(names), "") {
+		label := ModelName(m)
+		if m == "" {
+			label = "По умолчанию"
+		}
+		if m == current {
+			label = "✓ " + label
+		}
+		b := Button{Text: label, Data: "m:" + m}
+		if i%choicesInRow == 0 {
+			kb = append(kb, []Button{b})
+			continue
+		}
+		kb[len(kb)-1] = append(kb[len(kb)-1], b)
+	}
+	return kb
+}
+
+// ModelName is how a model is shown to the user: its name with a capital letter, or
+// "по умолчанию" for the backend's default.
+func ModelName(model string) string {
+	if model == "" {
+		return "по умолчанию"
+	}
+	r := []rune(model)
+	return strings.ToUpper(string(r[0])) + string(r[1:])
+}
+
+// Conversation returns the buttons under /status that compact the conversation or start a new one.
+func Conversation() Keyboard {
+	return Keyboard{{{Text: "🗜 Сжать", Data: "compact"}, {Text: "🆕 Новый разговор", Data: "reset"}}}
+}
+
+// Memory returns the button under the memory view that clears the conversation's automatic memory.
+func Memory() Keyboard {
+	return Keyboard{{{Text: "🧹 Очистить память разговора", Data: "forget"}}}
 }
 
 // Markup converts kb to a Telegram inline keyboard; an empty kb removes the keyboard of an edited message.
@@ -155,19 +206,18 @@ func (kb Keyboard) Label(data string) string {
 // Parse decodes the data of a pressed button; unknown data gives Kind Unknown.
 func Parse(data string) Press {
 	head, rest, _ := strings.Cut(data, ":")
+	if kind, ok := plainKinds[head]; ok {
+		return Press{Kind: kind}
+	}
 	switch head {
 	case "c":
 		return parseChoice(rest)
 	case "z":
 		return parseSnooze(rest)
-	case "d":
-		return Press{Kind: Done}
-	case "s":
-		return Press{Kind: Stop}
-	case "n":
-		return Press{Kind: AnswerNew}
 	case "t":
 		return parseTask(rest)
+	case "m":
+		return Press{Kind: Model, Model: rest}
 	default:
 		return Press{}
 	}
