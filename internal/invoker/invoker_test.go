@@ -439,3 +439,33 @@ func TestSetModel_IsUsedByTheChatsRunsOnly(t *testing.T) {
 	assert.Empty(t, inv.Model(100, 5))
 	assert.Nil(t, newTestInvoker(t, &fakeProvider{client: client}, Options{}).Models())
 }
+
+type contextProvider struct {
+	fakeProvider
+}
+
+func (p *contextProvider) ContextUsage(string) (cli.ContextUsage, bool) {
+	return cli.ContextUsage{Tokens: 1200}, true
+}
+func (p *contextProvider) CompactPrompt() string { return "/compact" }
+
+func TestCompact_SendsTheCommandWithoutTheTimeHeader(t *testing.T) {
+	client := &fakeClient{result: &cli.Result{}}
+	inv := newTestInvoker(t, &contextProvider{fakeProvider{client: client}}, Options{})
+
+	require.NoError(t, inv.Compact(context.Background(), 100, 5))
+
+	assert.Equal(t, "/compact", client.query)
+	assert.Equal(t, "continue", client.mode)
+	usage, ok := inv.ContextUsage(100, 5)
+	assert.True(t, ok)
+	assert.Equal(t, 1200, usage.Tokens)
+}
+
+func TestCompact_UnsupportedBackend(t *testing.T) {
+	inv := newTestInvoker(t, &fakeProvider{client: &fakeClient{}}, Options{})
+
+	require.Error(t, inv.Compact(context.Background(), 100, 5))
+	_, ok := inv.ContextUsage(100, 5)
+	assert.False(t, ok)
+}

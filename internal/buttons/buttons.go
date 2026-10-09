@@ -36,6 +36,8 @@ const (
 	TaskAction
 	Model
 	ForgetMemory
+	Compact
+	NewConversation
 )
 
 // Task actions carried by TaskAction buttons.
@@ -64,7 +66,9 @@ var (
 	snoozes     = []time.Duration{15 * time.Minute, time.Hour, 24 * time.Hour}
 	snoozeLabel = map[time.Duration]string{15 * time.Minute: "+15 мин", time.Hour: "+1 час", 24 * time.Hour: "Завтра"}
 	taskCodes   = map[string]string{TaskPause: "p", TaskResume: "r", TaskCancel: "c"}
-	plainKinds  = map[string]Kind{"d": Done, "s": Stop, "n": AnswerNew, "forget": ForgetMemory}
+	plainKinds  = map[string]Kind{
+		"d": Done, "s": Stop, "n": AnswerNew, "forget": ForgetMemory, "compact": Compact, "reset": NewConversation,
+	}
 )
 
 // Choices lays out answer options: two per row when every label is short, else one per row.
@@ -146,6 +150,11 @@ func ModelName(model string) string {
 	}
 	r := []rune(model)
 	return strings.ToUpper(string(r[0])) + string(r[1:])
+}
+
+// Conversation returns the buttons under /status that compact the conversation or start a new one.
+func Conversation() Keyboard {
+	return Keyboard{{{Text: "🗜 Сжать", Data: "compact"}, {Text: "🆕 Новый разговор", Data: "reset"}}}
 }
 
 // Memory returns the button under the memory view that clears the conversation's automatic memory.

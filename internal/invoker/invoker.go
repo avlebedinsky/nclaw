@@ -4,6 +4,7 @@ package invoker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -63,6 +64,7 @@ type Request struct {
 	Prompt    string
 	Mode      Mode
 	Configure func(cli.Client)
+	Command   bool
 }
 
 // Outcome is the result of a run. Result is never nil.
@@ -165,6 +167,25 @@ func (i *Invoker) MemoryFiles(chatID int64, threadID int) (shared, own string) {
 	return filepath.Join(i.ChatDir(chatID, 0), mp.MemoryFile()), filepath.Join(i.ChatDir(chatID, threadID), mp.MemoryFile())
 }
 
+// ContextUsage reports how full a chat/thread's conversation is, when the backend can tell.
+func (i *Invoker) ContextUsage(chatID int64, threadID int) (cli.ContextUsage, bool) {
+	cp, ok := i.provider.(cli.ContextProvider)
+	if !ok {
+		return cli.ContextUsage{}, false
+	}
+	return cp.ContextUsage(i.ChatDir(chatID, threadID))
+}
+
+// Compact makes the backend compact a chat/thread's conversation. Callers serialize it with
+// the chat's runs.
+func (i *Invoker) Compact(ctx context.Context, chatID int64, threadID int) error {
+	cp, ok := i.provider.(cli.ContextProvider)
+	if !ok {
+		return errors.New("this backend cannot compact a conversation")
+	}
+	return i.Run(ctx, Request{ChatID: chatID, ThreadID: threadID, Prompt: cp.CompactPrompt(), Command: true}).Err
+}
+
 // Models lists the models a chat can switch to; nil when the backend offers no choice.
 func (i *Invoker) Models() []string {
 	if mp, ok := i.provider.(cli.ModelProvider); ok {
@@ -259,6 +280,9 @@ func (i *Invoker) dirs(req Request) Outcome {
 }
 
 func (i *Invoker) execute(client cli.Client, req Request, out Outcome) (*cli.Result, error) {
+	if req.Command {
+		return client.Continue(req.Prompt)
+	}
 	if req.Mode != Isolated {
 		return i.continueOrStart(client, out.Dir, req.Prompt)
 	}

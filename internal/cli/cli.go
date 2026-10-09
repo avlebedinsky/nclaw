@@ -82,6 +82,23 @@ type AutoMemoryStore interface {
 	ClearAutoMemory(dir string) error
 }
 
+// ContextUsage is how full a conversation's context was at its last reply.
+type ContextUsage struct {
+	Tokens int
+	// CompactAt is the size at which the CLI compacts the conversation by itself; 0 when unknown.
+	CompactAt int
+	// Model is the model that wrote the last reply.
+	Model string
+}
+
+// ContextProvider is implemented by providers that can tell how full a conversation's
+// context is and compact it on request.
+type ContextProvider interface {
+	ContextUsage(dir string) (ContextUsage, bool)
+	// CompactPrompt is the prompt that makes the CLI compact the conversation.
+	CompactPrompt() string
+}
+
 // AuthProvider is implemented by providers whose stored sign-in expires on a known date.
 type AuthProvider interface {
 	// AuthExpiry returns when the stored sign-in stops working; ok is false when it is unknown.

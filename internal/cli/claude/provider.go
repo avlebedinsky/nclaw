@@ -18,6 +18,7 @@ var (
 	_ cli.MemoryFileProvider   = (*Provider)(nil)
 	_ cli.ModelProvider        = (*Provider)(nil)
 	_ cli.AutoMemoryStore      = (*Provider)(nil)
+	_ cli.ContextProvider      = (*Provider)(nil)
 )
 
 // NewProvider creates a new Claude CLI provider.
@@ -85,6 +86,16 @@ func (p *Provider) AutoMemoryDir(dir string) (string, error) {
 // ClearAutoMemory moves the auto memory of dir aside.
 func (p *Provider) ClearAutoMemory(dir string) error {
 	return ClearAutoMemory(dir)
+}
+
+// ContextUsage reports how full the latest conversation of dir is.
+func (p *Provider) ContextUsage(dir string) (cli.ContextUsage, bool) {
+	return ContextUsage(dir)
+}
+
+// CompactPrompt is the CLI's slash command that compacts the conversation.
+func (p *Provider) CompactPrompt() string {
+	return "/compact"
 }
 
 // ArchiveSession archives the session history for dir so the next run starts fresh.

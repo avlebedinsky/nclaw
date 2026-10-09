@@ -57,6 +57,11 @@ func (h *Handler) press(q *models.CallbackQuery, msg *models.Message, p buttons.
 		buttons.TaskAction:   func() string { return h.taskButton(msg, key, p) },
 		buttons.Model:        func() string { return h.modelButton(msg, key, p.Model) },
 		buttons.ForgetMemory: func() string { return h.forgetMemory(msg, key) },
+		buttons.Compact:      func() string { return h.compact(key) },
+		buttons.NewConversation: func() string {
+			h.newSession(key)
+			return "🆕 Начинаю новый разговор"
+		},
 	}
 	if act, ok := actions[p.Kind]; ok {
 		return act()

@@ -135,9 +135,17 @@ func isASCIIAlnum(r rune) bool {
 }
 
 func latestTranscriptSize(projectDir string) (int64, bool) {
+	latest, ok := latestTranscript(projectDir)
+	if !ok {
+		return 0, false
+	}
+	return latest.Size(), true
+}
+
+func latestTranscript(projectDir string) (os.FileInfo, bool) {
 	entries, err := os.ReadDir(projectDir)
 	if err != nil {
-		return 0, false
+		return nil, false
 	}
 
 	var latest os.FileInfo
@@ -147,11 +155,7 @@ func latestTranscriptSize(projectDir string) (int64, bool) {
 			latest = info
 		}
 	}
-
-	if latest == nil {
-		return 0, false
-	}
-	return latest.Size(), true
+	return latest, latest != nil
 }
 
 func transcriptInfo(e os.DirEntry) (os.FileInfo, bool) {

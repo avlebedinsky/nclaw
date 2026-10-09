@@ -20,6 +20,8 @@ func TestParse(t *testing.T) {
 		"t:r:task-1a": {Kind: TaskAction, Action: TaskResume, TaskID: "task-1a"},
 		"t:c:task-1a": {Kind: TaskAction, Action: TaskCancel, TaskID: "task-1a"},
 		"forget":      {Kind: ForgetMemory},
+		"compact":     {Kind: Compact},
+		"reset":       {Kind: NewConversation},
 	}
 	for data, want := range cases {
 		assert.Equal(t, want, Parse(data), data)

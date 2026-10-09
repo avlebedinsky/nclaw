@@ -328,3 +328,43 @@ func TestMemoryCommand_UnavailableWithoutMemory(t *testing.T) {
 
 	assert.False(t, h.MatchCommand(commandUpdate("/memory")))
 }
+
+type contextProvider struct {
+	modelsProvider
+}
+
+func (p *contextProvider) ContextUsage(string) (cli.ContextUsage, bool) {
+	return cli.ContextUsage{Tokens: 156_300, CompactAt: 400_000, Model: "claude-opus-5-5"}, true
+}
+func (p *contextProvider) CompactPrompt() string { return "/compact" }
+
+func TestStatusCommand_ShowsContextModelAndButtons(t *testing.T) {
+	client := &mockClient{contResult: &cli.Result{}}
+	h := newTestHandler(t, &contextProvider{modelsProvider{mockProvider{client: client}}}, nil)
+	sends := captureSends(h)
+
+	h.Command(context.Background(), nil, commandUpdate("/status"))
+
+	m := nextSend(t, sends)
+	assert.Equal(t, "💤 Сейчас ничего не выполняется.\nБэкенд: mock.\n"+
+		"Контекст: 156K токенов из 400K до автосжатия (39%).\n"+
+		"Модель: по умолчанию, последний ответ — claude-opus-5-5.", m.text)
+	assert.Equal(t, buttons.Conversation(), m.dest.Buttons)
+}
+
+func TestStatusButtons_CompactAndNewConversation(t *testing.T) {
+	client := &mockClient{contResult: &cli.Result{}}
+	h := newTestHandler(t, &contextProvider{modelsProvider{mockProvider{client: client}}}, nil)
+	fb := &fakeButtons{}
+	h.Buttons = fb
+	sends := captureSends(h)
+	msg := &models.Message{ID: 8, Chat: models.Chat{ID: 100}}
+
+	h.Button(context.Background(), nil, press(msg, "compact"))
+	assert.Equal(t, "🗜 Сжимаю разговор…", fb.waitAnswer(t))
+	assert.Equal(t, "🗜 Разговор сжат: было 156K токенов, стало 156K.", nextSend(t, sends).text)
+	assert.Equal(t, "/compact", client.lastQuery)
+
+	h.Button(context.Background(), nil, press(msg, "reset"))
+	assert.Equal(t, "🆕 Начат новый разговор.", nextSend(t, sends).text)
+}

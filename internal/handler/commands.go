@@ -16,6 +16,7 @@ import (
 
 	"github.com/nickalie/nclaw/internal/buttons"
 	"github.com/nickalie/nclaw/internal/chatqueue"
+	"github.com/nickalie/nclaw/internal/cli"
 	"github.com/nickalie/nclaw/internal/model"
 	"github.com/nickalie/nclaw/internal/pipeline"
 	"github.com/nickalie/nclaw/internal/ru"
@@ -139,13 +140,64 @@ func (h *Handler) newSession(key chatqueue.Key) {
 func (h *Handler) status(key chatqueue.Key) {
 	snap := h.Queue.Snapshot(key)
 	size, hasSize := h.Invoker.SessionSize(key.ChatID, key.ThreadID)
-	text := statusText(&snap, size, hasSize, h.Invoker.MaxSessionBytes(), h.Invoker.ProviderName())
-	if h.AuthStatus != nil {
-		if line := h.AuthStatus(); line != "" {
-			text += "\n" + line
-		}
+	usage, hasUsage := h.Invoker.ContextUsage(key.ChatID, key.ThreadID)
+	maxBytes := h.Invoker.MaxSessionBytes()
+	lines := []string{statusText(&snap, size, hasSize && (!hasUsage || maxBytes > 0), maxBytes, h.Invoker.ProviderName())}
+	if hasUsage {
+		lines = append(lines, contextLine(usage))
 	}
-	go h.notify(key, text)
+	lines = appendNonEmpty(lines, h.modelLine(key, usage.Model))
+	if h.AuthStatus != nil {
+		lines = appendNonEmpty(lines, h.AuthStatus())
+	}
+	var kb buttons.Keyboard
+	if hasUsage {
+		kb = buttons.Conversation()
+	}
+	go h.sendWithin(key, strings.Join(lines, "\n"), kb, 15*time.Second)
+}
+
+func contextLine(u cli.ContextUsage) string {
+	line := "Контекст: " + humanTokens(u.Tokens) + " токенов"
+	if u.CompactAt > 0 {
+		line += fmt.Sprintf(" из %s до автосжатия (%d%%)", humanTokens(u.CompactAt), u.Tokens*100/u.CompactAt)
+	}
+	return line + "."
+}
+
+func humanTokens(n int) string {
+	if n < 1000 {
+		return fmt.Sprint(n)
+	}
+	return fmt.Sprintf("%dK", (n+500)/1000)
+}
+
+func (h *Handler) modelLine(key chatqueue.Key, last string) string {
+	if len(h.Invoker.Models()) == 0 {
+		return ""
+	}
+	line := "Модель: " + buttons.ModelName(h.Invoker.Model(key.ChatID, key.ThreadID))
+	if last != "" {
+		line += ", последний ответ — " + last
+	}
+	return line + "."
+}
+
+func (h *Handler) compact(key chatqueue.Key) string {
+	job := chatqueue.Job{Kind: chatqueue.KindControl, Label: "compact", Fn: func(ctx context.Context) {
+		before, _ := h.Invoker.ContextUsage(key.ChatID, key.ThreadID)
+		if err := h.Invoker.Compact(ctx, key.ChatID, key.ThreadID); err != nil {
+			log.Printf("handler: compact chat=%d thread=%d: %v", key.ChatID, key.ThreadID, err)
+			h.notify(key, "Не удалось сжать разговор: "+err.Error())
+			return
+		}
+		after, _ := h.Invoker.ContextUsage(key.ChatID, key.ThreadID)
+		h.notify(key, fmt.Sprintf("🗜 Разговор сжат: было %s токенов, стало %s.", humanTokens(before.Tokens), humanTokens(after.Tokens)))
+	}}
+	if _, err := h.Queue.Submit(key, job); err != nil {
+		return "Не удалось сжать: " + err.Error()
+	}
+	return "🗜 Сжимаю разговор…"
 }
 
 func statusText(snap *chatqueue.Snapshot, size int64, hasSize bool, maxBytes int64, backend string) string {
