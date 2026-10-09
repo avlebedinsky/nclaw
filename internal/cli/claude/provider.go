@@ -16,6 +16,7 @@ var (
 	_ cli.AuthProvider         = (*Provider)(nil)
 	_ cli.LoginProvider        = (*Provider)(nil)
 	_ cli.MemoryFileProvider   = (*Provider)(nil)
+	_ cli.ModelProvider        = (*Provider)(nil)
 )
 
 // NewProvider creates a new Claude CLI provider.
@@ -58,6 +59,11 @@ func (p *Provider) newClaude() *Claude {
 // MemoryFile names the instructions file Claude Code loads from the working directory and its parents.
 func (p *Provider) MemoryFile() string {
 	return "CLAUDE.md"
+}
+
+// Models lists the model aliases a chat can switch to.
+func (p *Provider) Models() []string {
+	return []string{"opus", "sonnet", "haiku"}
 }
 
 // NativeSkills reports that the CLI loads skills from its own skills directory.

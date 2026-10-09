@@ -464,3 +464,50 @@ func TestNewCommand_ForgetsTheStoppedReply(t *testing.T) {
 	assert.Contains(t, client.lastQuery, "привет")
 	assert.NotContains(t, client.lastQuery, "stopped your previous reply")
 }
+
+type modelsProvider struct {
+	mockProvider
+}
+
+func (p *modelsProvider) Models() []string { return []string{"opus", "sonnet", "haiku"} }
+
+func TestModelCommand_ShowsTheChoiceAndAPressSwitchesTheChat(t *testing.T) {
+	client := &mockClient{contResult: &cli.Result{Text: "ok"}}
+	h := newTestHandler(t, &modelsProvider{mockProvider{client: client}}, func(context.Context, pipeline.Dest, string, string) error { return nil })
+	fb := &fakeButtons{}
+	h.Buttons = fb
+	sends := captureSends(h)
+	require.True(t, h.MatchCommand(commandUpdate("/model")))
+
+	h.Command(context.Background(), nil, commandUpdate("/model"))
+	m := nextSend(t, sends)
+	assert.Equal(t, "Модель в этом чате: по умолчанию.", m.text)
+	assert.Equal(t, buttons.Models([]string{"opus", "sonnet", "haiku"}, ""), m.dest.Buttons)
+
+	h.Button(context.Background(), nil, press(&models.Message{ID: 3, Chat: models.Chat{ID: 100}}, "m:opus"))
+	assert.Equal(t, "Модель: Opus", fb.waitAnswer(t))
+	e := fb.waitEdit(t)
+	assert.Equal(t, "Модель в этом чате: Opus.", e.text)
+	assert.Equal(t, "✓ Opus", e.kb[0][0].Text)
+
+	h.Default(context.Background(), nil, chatMessage("привет"))
+	waitQueue(t, h)
+	assert.Equal(t, "opus", client.model)
+}
+
+func TestModelButton_UnknownModelIsStale(t *testing.T) {
+	h := newTestHandler(t, &modelsProvider{mockProvider{client: &mockClient{}}}, nil)
+	fb := &fakeButtons{}
+	h.Buttons = fb
+
+	h.Button(context.Background(), nil, press(&models.Message{ID: 3, Chat: models.Chat{ID: 100}}, "m:gpt-5"))
+
+	assert.Equal(t, staleButton, fb.waitAnswer(t))
+	assert.Empty(t, h.Invoker.Model(100, 0))
+}
+
+func TestModelCommand_UnavailableWithoutModelChoice(t *testing.T) {
+	h := newTestHandler(t, &mockProvider{client: &mockClient{}}, nil)
+
+	assert.False(t, h.MatchCommand(commandUpdate("/model")))
+}

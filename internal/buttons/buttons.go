@@ -4,6 +4,7 @@ package buttons
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -33,6 +34,7 @@ const (
 	Stop
 	AnswerNew
 	TaskAction
+	Model
 )
 
 // Task actions carried by TaskAction buttons.
@@ -49,6 +51,7 @@ type Press struct {
 	After  time.Duration
 	Action string
 	TaskID string
+	Model  string
 }
 
 const (
@@ -111,6 +114,38 @@ func Task(n int, taskID string, paused bool) []Button {
 	return []Button{toggle, {Text: fmt.Sprintf("🗑 %d", n), Data: "t:c:" + taskID}}
 }
 
+// Models returns a button per model plus one for the backend's default, two per row,
+// with the current choice ticked; current is "" for the default.
+func Models(names []string, current string) Keyboard {
+	var kb Keyboard
+	for i, m := range append(slices.Clone(names), "") {
+		label := ModelName(m)
+		if m == "" {
+			label = "По умолчанию"
+		}
+		if m == current {
+			label = "✓ " + label
+		}
+		b := Button{Text: label, Data: "m:" + m}
+		if i%choicesInRow == 0 {
+			kb = append(kb, []Button{b})
+			continue
+		}
+		kb[len(kb)-1] = append(kb[len(kb)-1], b)
+	}
+	return kb
+}
+
+// ModelName is how a model is shown to the user: its name with a capital letter, or
+// "по умолчанию" for the backend's default.
+func ModelName(model string) string {
+	if model == "" {
+		return "по умолчанию"
+	}
+	r := []rune(model)
+	return strings.ToUpper(string(r[0])) + string(r[1:])
+}
+
 // Markup converts kb to a Telegram inline keyboard; an empty kb removes the keyboard of an edited message.
 func Markup(kb Keyboard) models.InlineKeyboardMarkup {
 	rows := make([][]models.InlineKeyboardButton, 0, len(kb))
@@ -168,6 +203,8 @@ func Parse(data string) Press {
 		return Press{Kind: AnswerNew}
 	case "t":
 		return parseTask(rest)
+	case "m":
+		return Press{Kind: Model, Model: rest}
 	default:
 		return Press{}
 	}

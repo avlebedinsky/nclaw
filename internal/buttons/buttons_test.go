@@ -83,3 +83,16 @@ func TestMarkupRoundTripAndLabel(t *testing.T) {
 	assert.Nil(t, FromMarkup(nil))
 	assert.Empty(t, Markup(nil).InlineKeyboard)
 }
+
+func TestModels_TicksTheCurrentChoiceTwoPerRow(t *testing.T) {
+	kb := Models([]string{"opus", "sonnet", "haiku"}, "sonnet")
+
+	assert.Equal(t, Keyboard{
+		{{Text: "Opus", Data: "m:opus"}, {Text: "✓ Sonnet", Data: "m:sonnet"}},
+		{{Text: "Haiku", Data: "m:haiku"}, {Text: "По умолчанию", Data: "m:"}},
+	}, kb)
+	assert.Equal(t, "✓ По умолчанию", Models([]string{"opus"}, "")[0][1].Text)
+	assert.Equal(t, Press{Kind: Model, Model: "opus"}, Parse("m:opus"))
+	assert.Equal(t, Press{Kind: Model}, Parse("m:"))
+	assert.Equal(t, "по умолчанию", ModelName(""))
+}

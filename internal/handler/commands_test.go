@@ -85,7 +85,8 @@ func TestParseCommand(t *testing.T) {
 }
 
 func TestMatchCommand(t *testing.T) {
-	h := &Handler{BotUsername: "MyBot"}
+	h := newTestHandler(t, &mockProvider{client: &mockClient{}}, nil)
+	h.BotUsername = "MyBot"
 	assert.True(t, h.MatchCommand(commandUpdate("/stop")))
 	assert.True(t, h.MatchCommand(commandUpdate("/status@MyBot")))
 	assert.True(t, h.MatchCommand(commandUpdate("/new")))

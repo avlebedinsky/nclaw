@@ -27,6 +27,7 @@ var Commands = []models.BotCommand{
 	{Command: "new", Description: "Начать новый разговор"},
 	{Command: "status", Description: "Что бот сейчас делает в этом чате"},
 	{Command: "tasks", Description: "Задачи по расписанию в этом чате"},
+	{Command: "model", Description: "Выбрать модель для этого чата"},
 }
 
 // LoginCommand is offered only in the admin chat, where /login works.
@@ -72,26 +73,17 @@ func (h *Handler) StopGeneration(_ context.Context, _ *bot.Bot, update *models.U
 }
 
 func (h *Handler) commandFunc(name string) func(chatqueue.Key) {
-	switch name {
-	case "stop":
-		return h.stop
-	case "new":
-		return h.newSession
-	case "status":
-		return h.status
-	case "tasks":
-		if h.Tasks == nil {
-			return nil
-		}
-		return h.tasks
-	case "login":
-		if h.Logins == nil {
-			return nil
-		}
-		return h.login
-	default:
-		return nil
+	commands := map[string]func(chatqueue.Key){"stop": h.stop, "new": h.newSession, "status": h.status}
+	if h.Tasks != nil {
+		commands["tasks"] = h.tasks
 	}
+	if len(h.Invoker.Models()) > 0 {
+		commands["model"] = h.model
+	}
+	if h.Logins != nil {
+		commands["login"] = h.login
+	}
+	return commands[name]
 }
 
 func (h *Handler) stop(key chatqueue.Key) {
@@ -237,6 +229,19 @@ func (h *Handler) sendWithin(key chatqueue.Key, text string, kb buttons.Keyboard
 	if err := h.Send(ctx, dest, text, ""); err != nil {
 		log.Printf("handler: notify chat=%d thread=%d: %v", key.ChatID, key.ThreadID, err)
 	}
+}
+
+func (h *Handler) model(key chatqueue.Key) {
+	go func() {
+		text, kb := h.modelView(key)
+		h.sendWithin(key, text, kb, 15*time.Second)
+	}()
+}
+
+func (h *Handler) modelView(key chatqueue.Key) (string, buttons.Keyboard) {
+	current := h.Invoker.Model(key.ChatID, key.ThreadID)
+	text := "Модель в этом чате: " + buttons.ModelName(current) + "."
+	return text, buttons.Models(h.Invoker.Models(), current)
 }
 
 func (h *Handler) tasks(key chatqueue.Key) {

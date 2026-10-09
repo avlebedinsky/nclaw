@@ -96,6 +96,17 @@ type LoginSession interface {
 	Cancel()
 }
 
+// ModelProvider is implemented by providers whose runs can use a model chosen per chat.
+type ModelProvider interface {
+	// Models lists the model names or aliases a chat can switch to.
+	Models() []string
+}
+
+// ModelClient is implemented by clients that can run a given model.
+type ModelClient interface {
+	UseModel(model string) Client
+}
+
 // EphemeralClient is implemented by clients that can run without persisting the
 // session, so one-off runs leave no conversation behind.
 type EphemeralClient interface {

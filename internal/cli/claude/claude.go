@@ -21,6 +21,7 @@ var (
 	_ cli.EphemeralClient = (*Claude)(nil)
 	_ cli.ProgressClient  = (*Claude)(nil)
 	_ cli.PartialClient   = (*Claude)(nil)
+	_ cli.ModelClient     = (*Claude)(nil)
 )
 
 // outputFormat represents the output format for the CLI.
@@ -93,6 +94,11 @@ func (c *Claude) Dir(dir string) cli.Client {
 func (c *Claude) Model(model string) *Claude {
 	c.model = model
 	return c
+}
+
+// UseModel runs the given model, as cli.ModelClient.
+func (c *Claude) UseModel(model string) cli.Client {
+	return c.Model(model)
 }
 
 // FallbackModel sets an automatic fallback model when the default is overloaded.

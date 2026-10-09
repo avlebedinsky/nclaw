@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"slices"
 	"time"
 
 	"github.com/go-telegram/bot"
@@ -61,6 +62,8 @@ func (h *Handler) press(q *models.CallbackQuery, msg *models.Message, p buttons.
 		return h.answerNew(key)
 	case buttons.TaskAction:
 		return h.taskButton(msg, key, p)
+	case buttons.Model:
+		return h.modelButton(msg, key, p.Model)
 	default:
 		return staleButton
 	}
@@ -82,6 +85,18 @@ func (h *Handler) taskButton(msg *models.Message, key chatqueue.Key, p buttons.P
 	text, kb := h.taskList(key)
 	go h.edit(msg, text, nil, kb)
 	return toast
+}
+
+func (h *Handler) modelButton(msg *models.Message, key chatqueue.Key, name string) string {
+	if name != "" && !slices.Contains(h.Invoker.Models(), name) {
+		return staleButton
+	}
+	if err := h.Invoker.SetModel(key.ChatID, key.ThreadID, name); err != nil {
+		return "Не удалось сменить модель: " + err.Error()
+	}
+	text, kb := h.modelView(key)
+	go h.edit(msg, text, nil, kb)
+	return "Модель: " + buttons.ModelName(name)
 }
 
 func (h *Handler) answerNew(key chatqueue.Key) string {

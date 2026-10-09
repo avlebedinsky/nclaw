@@ -560,7 +560,10 @@ type mockClient struct {
 	contResult   *cli.Result
 	contErr      error
 	lastQuery    string
+	model        string
 }
+
+func (m *mockClient) UseModel(model string) cli.Client { m.model = model; return m }
 
 func (m *mockClient) Dir(dir string) cli.Client              { m.dir = dir; return m }
 func (m *mockClient) Context(context.Context) cli.Client     { return m }
