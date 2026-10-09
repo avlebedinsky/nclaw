@@ -66,7 +66,7 @@ The recommended way to run NClaw is inside Docker — the container serves as a 
 - **Russian interface** — The bot's own messages, buttons and command menu are in Russian; the assistant answers in the language you write in.
 - **Live answer and reactions** — In private chats the answer appears as it is being written (Claude backend), with a stop button. Messages get a reaction while they wait (👀), run (✍), succeed (👌) or fail (💔), and the answer is sent as a reply to the question.
 - **Long answers as a file** — An answer that would take more than three messages arrives as its beginning plus the full text in `answer.md`. Tables are rendered as aligned text, since Telegram cannot display them.
-- **Chat commands** — `/stop` cancels the current run, `/new` starts a fresh conversation, `/status` shows what the bot is doing, `/tasks` lists the chat's scheduled tasks with buttons to pause, resume or cancel them.
+- **Chat commands** — `/stop` cancels the current run, `/new` starts a fresh conversation, `/status` shows what the bot is doing and how full the conversation's context is, `/tasks` manages the chat's scheduled tasks, `/model` picks the model per chat, `/memory` shows what the bot remembers, `/skills` lists the available skills and `/help` sums it all up.
 - **File delivery** — The assistant can send files back to you (generated reports, exports, code).
 - **Scheduled tasks** — Create recurring or one-time jobs using natural language.
 - **Webhooks** — Register HTTP endpoints that forward incoming requests to the assistant in your chat.
@@ -662,8 +662,12 @@ webhook:
 |---|---|
 | `/stop` | Cancels the current run in this chat (the agent's whole process tree is stopped) and drops queued messages and pending task/webhook runs |
 | `/new` | Starts a new conversation after the current queue: the previous session is archived (Claude/Claudish; the agent's auto memory for the chat is kept) or the next run starts without resuming (other backends) |
-| `/status` | Shows what is running and for how long, what is queued, the session size, the backend and when the Claude sign-in expires |
+| `/status` | Shows what is running and for how long, what is queued, how full the conversation's context is (Claude: tokens of the last reply, against `CLAUDE_CODE_AUTO_COMPACT_WINDOW` when set), the chat's model and the one that wrote the last reply, the backend and when the Claude sign-in expires. Buttons compact the conversation now or start a new one |
 | `/tasks` | Lists the active and paused scheduled tasks of this chat or topic with their schedule and next run, with buttons to pause, resume or cancel each one |
+| `/model` | Shows the chat's model with a button per model (Claude: Opus, Sonnet, Haiku) and one for the CLI's default; the choice applies to every later run of this chat or topic |
+| `/memory` | Shows what the agent remembers here: the conversation's auto memory, the `CLAUDE.md` shared by a group's topics and the topic's own one. A button clears the auto memory (it is moved aside and archived with the conversation on the next `/new`) |
+| `/skills` | Lists the topic's own skills and the global ones with a short description |
+| `/help` | Lists the commands that work in this chat and what the buttons do; `/start` shows the same |
 | `/login` | Admin's private chat only (Claude backend): signs the bot in to Claude again. The bot sends a sign-in link; open it, sign in and send back the code shown at the end |
 
 Commands work while the assistant is busy and are registered in Telegram's command menu. In groups, `/command@yourbot` is supported; commands addressed to other bots are ignored.
