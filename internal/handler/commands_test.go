@@ -225,3 +225,48 @@ func TestShutdown_InterruptsRunAndNotifiesChat(t *testing.T) {
 	require.Len(t, sent.all(), 1)
 	assert.Contains(t, sent.all()[0], "ваш запрос прерван")
 }
+
+func writeSkill(t *testing.T, dir, name, description string) {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, name), 0o755))
+	body := "---\nname: " + name + "\ndescription: " + description + "\n---\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, name, "SKILL.md"), []byte(body), 0o644))
+}
+
+func TestSkillsCommand_ListsTopicAndGlobalSkills(t *testing.T) {
+	sent := &safeSent{}
+	h := newTestHandler(t, &mockProvider{client: &mockClient{}}, nil)
+	h.Send = sent.send
+	global, extra := t.TempDir(), t.TempDir()
+	writeSkill(t, global, "gmail", "Read and send mail. Use when asked about email.")
+	writeSkill(t, extra, "gmail", "Duplicate from a second skills dir.")
+	writeSkill(t, global, "schedule", "Schedule tasks.")
+	var gotDir string
+	h.SkillDirs = func(workDir string) (string, []string) {
+		gotDir = workDir
+		local := filepath.Join(workDir, ".claude", "skills")
+		writeSkill(t, local, "topic-books", "Книги в этом топике. Подробности дальше.")
+		return local, []string{global, extra}
+	}
+	update := commandUpdate("/skills")
+	update.Message.MessageThreadID = 546
+
+	h.Command(context.Background(), nil, update)
+
+	require.Eventually(t, func() bool { return len(sent.all()) == 1 }, 5*time.Second, 10*time.Millisecond)
+	assert.Equal(t, h.Invoker.ChatDir(100, 546), gotDir)
+	assert.Equal(t, "🧩 Скиллы этого топика:\n• topic-books — Книги в этом топике.\n\n"+
+		"🧩 Общие скиллы (2):\n• gmail — Read and send mail.\n• schedule — Schedule tasks.", sent.all()[0])
+}
+
+func TestSkillsCommand_NothingInstalled(t *testing.T) {
+	sent := &safeSent{}
+	h := newTestHandler(t, &mockProvider{client: &mockClient{}}, nil)
+	h.Send = sent.send
+	h.SkillDirs = func(string) (string, []string) { return "", []string{t.TempDir()} }
+
+	h.Command(context.Background(), nil, commandUpdate("/skills"))
+
+	require.Eventually(t, func() bool { return len(sent.all()) == 1 }, 5*time.Second, 10*time.Millisecond)
+	assert.Equal(t, "Скиллов нет.", sent.all()[0])
+}

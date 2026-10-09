@@ -17,6 +17,7 @@ import (
 	"github.com/nickalie/nclaw/internal/model"
 	"github.com/nickalie/nclaw/internal/pipeline"
 	"github.com/nickalie/nclaw/internal/ru"
+	"github.com/nickalie/nclaw/internal/skills"
 )
 
 var commandRe = regexp.MustCompile(`^/([a-zA-Z0-9_]{1,32})(?:@([A-Za-z0-9_]+))?(?:\s|$)`)
@@ -28,6 +29,7 @@ var Commands = []models.BotCommand{
 	{Command: "status", Description: "Что бот сейчас делает в этом чате"},
 	{Command: "tasks", Description: "Задачи по расписанию в этом чате"},
 	{Command: "model", Description: "Выбрать модель для этого чата"},
+	{Command: "skills", Description: "Какие скиллы доступны здесь"},
 }
 
 // LoginCommand is offered only in the admin chat, where /login works.
@@ -79,6 +81,9 @@ func (h *Handler) commandFunc(name string) func(chatqueue.Key) {
 	}
 	if len(h.Invoker.Models()) > 0 {
 		commands["model"] = h.model
+	}
+	if h.SkillDirs != nil {
+		commands["skills"] = h.listSkills
 	}
 	if h.Logins != nil {
 		commands["login"] = h.login
@@ -242,6 +247,63 @@ func (h *Handler) modelView(key chatqueue.Key) (string, buttons.Keyboard) {
 	current := h.Invoker.Model(key.ChatID, key.ThreadID)
 	text := "Модель в этом чате: " + buttons.ModelName(current) + "."
 	return text, buttons.Models(h.Invoker.Models(), current)
+}
+
+func (h *Handler) listSkills(key chatqueue.Key) {
+	go h.notify(key, h.skillsText(key))
+}
+
+func (h *Handler) skillsText(key chatqueue.Key) string {
+	local, global := h.SkillDirs(h.Invoker.ChatDir(key.ChatID, key.ThreadID))
+	where := "этого чата"
+	if key.ThreadID != 0 {
+		where = "этого топика"
+	}
+	var sections []string
+	if own := skills.List(local); len(own) > 0 {
+		sections = append(sections, skillSection("🧩 Скиллы "+where+":", own))
+	}
+	if common := globalSkills(global); len(common) > 0 {
+		sections = append(sections, skillSection(fmt.Sprintf("🧩 Общие скиллы (%d):", len(common)), common))
+	}
+	if len(sections) == 0 {
+		return "Скиллов нет."
+	}
+	return strings.Join(sections, "\n\n")
+}
+
+func globalSkills(dirs []string) []skills.Info {
+	seen := map[string]bool{}
+	var list []skills.Info
+	for _, dir := range dirs {
+		for _, s := range skills.List(dir) {
+			if !seen[s.Name] {
+				seen[s.Name] = true
+				list = append(list, s)
+			}
+		}
+	}
+	return list
+}
+
+func skillSection(title string, list []skills.Info) string {
+	lines := make([]string, 0, len(list)+1)
+	lines = append(lines, title)
+	for _, s := range list {
+		line := "• " + s.Name
+		if d := firstSentence(s.Description); d != "" {
+			line += " — " + shorten(d, 80)
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func firstSentence(s string) string {
+	if i := strings.Index(s, ". "); i > 0 {
+		return s[:i+1]
+	}
+	return s
 }
 
 func (h *Handler) tasks(key chatqueue.Key) {

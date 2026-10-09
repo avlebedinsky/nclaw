@@ -43,6 +43,7 @@ type Handler struct {
 	Logins      *Logins
 	Buttons     ButtonAPI
 	Tasks       TaskManager
+	SkillDirs   func(workDir string) (local string, global []string)
 
 	cutOff sync.Map
 }

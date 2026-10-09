@@ -173,6 +173,7 @@ func setupBot(database *gorm.DB, provider cli.Provider) *app {
 		log.Fatal("scheduler: ", err)
 	}
 	h.Tasks = sched
+	h.SkillDirs = skillDirs()
 
 	webhookMgr := createWebhookManager(database, inv, queue)
 	p := buildPipeline(b, fileSenders, sched, webhookMgr)
@@ -280,6 +281,24 @@ func installBundledSkills() {
 			log.Printf("skills: %v", err)
 		}
 		logSkillReport(dest, &rep)
+	}
+}
+
+func skillDirs() func(string) (string, []string) {
+	claudeDir, err := claude.ConfigDir()
+	if err != nil {
+		log.Printf("skills: %v", err)
+		return nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		log.Printf("skills: %v", err)
+		return nil
+	}
+	backend := config.CLI()
+	global := skills.Dirs(backend, claudeDir, home)
+	return func(workDir string) (string, []string) {
+		return skills.LocalDir(backend, workDir), global
 	}
 }
 
