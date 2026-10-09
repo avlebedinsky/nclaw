@@ -21,7 +21,7 @@ import (
 // mockProvider implements cli.Provider for testing.
 type mockProvider struct{}
 
-func (m *mockProvider) NewClient() cli.Client { return nil }
+func (m *mockProvider) NewClient() cli.Client { return &mockCLIClient{} }
 func (m *mockProvider) PreInvoke() error      { return nil }
 func (m *mockProvider) Version() (string, error) {
 	return "mock-1.0.0", nil
