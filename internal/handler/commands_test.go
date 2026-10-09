@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/nickalie/nclaw/internal/buttons"
 	"github.com/nickalie/nclaw/internal/chatqueue"
 	"github.com/nickalie/nclaw/internal/cli"
 	"github.com/nickalie/nclaw/internal/pipeline"
@@ -269,4 +270,61 @@ func TestSkillsCommand_NothingInstalled(t *testing.T) {
 
 	require.Eventually(t, func() bool { return len(sent.all()) == 1 }, 5*time.Second, 10*time.Millisecond)
 	assert.Equal(t, "Скиллов нет.", sent.all()[0])
+}
+
+type memoryProvider struct {
+	mockProvider
+	memDir string
+}
+
+func (p *memoryProvider) MemoryFile() string                   { return "CLAUDE.md" }
+func (p *memoryProvider) AutoMemoryDir(string) (string, error) { return p.memDir, nil }
+func (p *memoryProvider) ClearAutoMemory(string) error         { return os.RemoveAll(p.memDir) }
+
+func TestMemoryCommand_ShowsWhatTheTopicRemembersAndClearsIt(t *testing.T) {
+	mem := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(mem, "MEMORY.md"), []byte("- [Кормление](feeding.md) — расписание\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(mem, "feeding.md"), []byte("утром и вечером"), 0o644))
+	h := newTestHandler(t, &memoryProvider{mockProvider: mockProvider{client: &mockClient{}}, memDir: mem}, nil)
+	fb := &fakeButtons{}
+	h.Buttons = fb
+	sends := captureSends(h)
+	require.NoError(t, os.MkdirAll(h.Invoker.ChatDir(100, 7), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(h.Invoker.ChatDir(100, 0), "CLAUDE.md"), []byte("# Группа\nтопики"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(h.Invoker.ChatDir(100, 7), "CLAUDE.md"), []byte("# Топик"), 0o644))
+	update := commandUpdate("/memory")
+	update.Message.MessageThreadID = 7
+
+	h.Command(context.Background(), nil, update)
+
+	m := nextSend(t, sends)
+	assert.Equal(t, "🧠 Память этого разговора:\n- [Кормление](feeding.md) — расписание\nФайлы заметок: feeding.md\n\n"+
+		"📌 Общее для всех топиков группы (CLAUDE.md):\n# Группа\nтопики\n\n"+
+		"📌 Заметки этого топика (CLAUDE.md):\n# Топик", m.text)
+	assert.Equal(t, buttons.Memory(), m.dest.Buttons)
+
+	msg := &models.Message{ID: 4, Chat: models.Chat{ID: 100}, MessageThreadID: 7}
+	h.Button(context.Background(), nil, press(msg, "forget"))
+	assert.Equal(t, "🧹 Память разговора очищена", fb.waitAnswer(t))
+	e := fb.waitEdit(t)
+	assert.NotContains(t, e.text, "Память этого разговора")
+	assert.Contains(t, e.text, "Заметки этого топика")
+	assert.Nil(t, e.kb)
+}
+
+func TestMemoryCommand_NothingRemembered(t *testing.T) {
+	h := newTestHandler(t, &memoryProvider{mockProvider: mockProvider{client: &mockClient{}}, memDir: t.TempDir()}, nil)
+	sends := captureSends(h)
+
+	h.Command(context.Background(), nil, commandUpdate("/memory"))
+
+	m := nextSend(t, sends)
+	assert.Equal(t, "Здесь пока ничего не запомнено.", m.text)
+	assert.Nil(t, m.dest.Buttons)
+}
+
+func TestMemoryCommand_UnavailableWithoutMemory(t *testing.T) {
+	h := newTestHandler(t, &mockProvider{client: &mockClient{}}, nil)
+
+	assert.False(t, h.MatchCommand(commandUpdate("/memory")))
 }

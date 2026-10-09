@@ -35,6 +35,7 @@ const (
 	AnswerNew
 	TaskAction
 	Model
+	ForgetMemory
 )
 
 // Task actions carried by TaskAction buttons.
@@ -63,6 +64,7 @@ var (
 	snoozes     = []time.Duration{15 * time.Minute, time.Hour, 24 * time.Hour}
 	snoozeLabel = map[time.Duration]string{15 * time.Minute: "+15 мин", time.Hour: "+1 час", 24 * time.Hour: "Завтра"}
 	taskCodes   = map[string]string{TaskPause: "p", TaskResume: "r", TaskCancel: "c"}
+	plainKinds  = map[string]Kind{"d": Done, "s": Stop, "n": AnswerNew, "forget": ForgetMemory}
 )
 
 // Choices lays out answer options: two per row when every label is short, else one per row.
@@ -146,6 +148,11 @@ func ModelName(model string) string {
 	return strings.ToUpper(string(r[0])) + string(r[1:])
 }
 
+// Memory returns the button under the memory view that clears the conversation's automatic memory.
+func Memory() Keyboard {
+	return Keyboard{{{Text: "🧹 Очистить память разговора", Data: "forget"}}}
+}
+
 // Markup converts kb to a Telegram inline keyboard; an empty kb removes the keyboard of an edited message.
 func Markup(kb Keyboard) models.InlineKeyboardMarkup {
 	rows := make([][]models.InlineKeyboardButton, 0, len(kb))
@@ -190,17 +197,14 @@ func (kb Keyboard) Label(data string) string {
 // Parse decodes the data of a pressed button; unknown data gives Kind Unknown.
 func Parse(data string) Press {
 	head, rest, _ := strings.Cut(data, ":")
+	if kind, ok := plainKinds[head]; ok {
+		return Press{Kind: kind}
+	}
 	switch head {
 	case "c":
 		return parseChoice(rest)
 	case "z":
 		return parseSnooze(rest)
-	case "d":
-		return Press{Kind: Done}
-	case "s":
-		return Press{Kind: Stop}
-	case "n":
-		return Press{Kind: AnswerNew}
 	case "t":
 		return parseTask(rest)
 	case "m":

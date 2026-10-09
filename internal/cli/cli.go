@@ -74,6 +74,14 @@ type MemoryFileProvider interface {
 	MemoryFile() string
 }
 
+// AutoMemoryStore is implemented by providers whose CLI keeps an automatic memory per
+// working directory.
+type AutoMemoryStore interface {
+	AutoMemoryDir(dir string) (string, error)
+	// ClearAutoMemory moves the automatic memory of dir aside, so the next run starts without it.
+	ClearAutoMemory(dir string) error
+}
+
 // AuthProvider is implemented by providers whose stored sign-in expires on a known date.
 type AuthProvider interface {
 	// AuthExpiry returns when the stored sign-in stops working; ok is false when it is unknown.

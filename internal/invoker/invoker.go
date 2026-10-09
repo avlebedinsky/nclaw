@@ -127,6 +127,44 @@ func (i *Invoker) MaxSessionBytes() int64 {
 	return i.opts.MaxSessionBytes
 }
 
+// HasMemory reports whether the backend keeps a memory nclaw can show: an automatic one
+// or instruction files it loads from the chat directories.
+func (i *Invoker) HasMemory() bool {
+	_, auto := i.provider.(cli.AutoMemoryStore)
+	_, files := i.provider.(cli.MemoryFileProvider)
+	return auto || files
+}
+
+// AutoMemoryDir returns the directory of a chat/thread's automatic memory; ok is false when
+// the backend keeps none.
+func (i *Invoker) AutoMemoryDir(chatID int64, threadID int) (string, bool) {
+	store, ok := i.provider.(cli.AutoMemoryStore)
+	if !ok {
+		return "", false
+	}
+	dir, err := store.AutoMemoryDir(i.ChatDir(chatID, threadID))
+	return dir, err == nil
+}
+
+// ClearAutoMemory moves a chat/thread's automatic memory aside.
+func (i *Invoker) ClearAutoMemory(chatID int64, threadID int) error {
+	store, ok := i.provider.(cli.AutoMemoryStore)
+	if !ok {
+		return nil
+	}
+	return store.ClearAutoMemory(i.ChatDir(chatID, threadID))
+}
+
+// MemoryFiles returns the instruction files the backend loads for a chat/thread: the one
+// shared by the whole chat and the thread's own; both are "" when it loads none.
+func (i *Invoker) MemoryFiles(chatID int64, threadID int) (shared, own string) {
+	mp, ok := i.provider.(cli.MemoryFileProvider)
+	if !ok {
+		return "", ""
+	}
+	return filepath.Join(i.ChatDir(chatID, 0), mp.MemoryFile()), filepath.Join(i.ChatDir(chatID, threadID), mp.MemoryFile())
+}
+
 // Models lists the models a chat can switch to; nil when the backend offers no choice.
 func (i *Invoker) Models() []string {
 	if mp, ok := i.provider.(cli.ModelProvider); ok {

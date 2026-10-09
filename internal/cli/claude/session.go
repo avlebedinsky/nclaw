@@ -61,6 +61,29 @@ func ArchiveSession(dir string) error {
 	return nil
 }
 
+// AutoMemoryDir returns the directory of Claude's auto memory for the working directory dir.
+func AutoMemoryDir(dir string) (string, error) {
+	projectDir, err := sessionDir(dir)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(projectDir, memoryDir), nil
+}
+
+// ClearAutoMemory moves the auto memory of dir aside; the moved copy is archived with the
+// conversation history by the next ArchiveSession.
+func ClearAutoMemory(dir string) error {
+	mem, err := AutoMemoryDir(dir)
+	if err != nil {
+		return err
+	}
+	err = os.Rename(mem, fmt.Sprintf("%s.cleared-%d", mem, time.Now().UnixNano()))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	return err
+}
+
 func moveHistory(projectDir string, entries []os.DirEntry) error {
 	archived := fmt.Sprintf("%s.archived-%d", projectDir, time.Now().UnixNano())
 	for _, e := range entries {

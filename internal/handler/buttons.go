@@ -48,25 +48,34 @@ func (h *Handler) Button(_ context.Context, _ *bot.Bot, update *models.Update) {
 
 func (h *Handler) press(q *models.CallbackQuery, msg *models.Message, p buttons.Press) string {
 	key := chatqueue.Key{ChatID: msg.Chat.ID, ThreadID: msg.MessageThreadID}
-	switch p.Kind {
-	case buttons.Choice:
-		return h.choose(q, msg, key)
-	case buttons.Done:
-		go h.closeButtons(msg, "✅ Готово")
-		return "Готово"
-	case buttons.Snooze:
-		return h.snooze(msg, key, p.After)
-	case buttons.Stop:
-		return stopText(h.Queue.Stop(key))
-	case buttons.AnswerNew:
-		return h.answerNew(key)
-	case buttons.TaskAction:
-		return h.taskButton(msg, key, p)
-	case buttons.Model:
-		return h.modelButton(msg, key, p.Model)
-	default:
-		return staleButton
+	actions := map[buttons.Kind]func() string{
+		buttons.Choice:       func() string { return h.choose(q, msg, key) },
+		buttons.Done:         func() string { return h.done(msg) },
+		buttons.Snooze:       func() string { return h.snooze(msg, key, p.After) },
+		buttons.Stop:         func() string { return stopText(h.Queue.Stop(key)) },
+		buttons.AnswerNew:    func() string { return h.answerNew(key) },
+		buttons.TaskAction:   func() string { return h.taskButton(msg, key, p) },
+		buttons.Model:        func() string { return h.modelButton(msg, key, p.Model) },
+		buttons.ForgetMemory: func() string { return h.forgetMemory(msg, key) },
 	}
+	if act, ok := actions[p.Kind]; ok {
+		return act()
+	}
+	return staleButton
+}
+
+func (h *Handler) done(msg *models.Message) string {
+	go h.closeButtons(msg, "✅ Готово")
+	return "Готово"
+}
+
+func (h *Handler) forgetMemory(msg *models.Message, key chatqueue.Key) string {
+	if err := h.Invoker.ClearAutoMemory(key.ChatID, key.ThreadID); err != nil {
+		return "Не удалось очистить память: " + err.Error()
+	}
+	text, kb := h.memoryView(key)
+	go h.edit(msg, text, nil, kb)
+	return "🧹 Память разговора очищена"
 }
 
 var (

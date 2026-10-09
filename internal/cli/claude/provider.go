@@ -17,6 +17,7 @@ var (
 	_ cli.LoginProvider        = (*Provider)(nil)
 	_ cli.MemoryFileProvider   = (*Provider)(nil)
 	_ cli.ModelProvider        = (*Provider)(nil)
+	_ cli.AutoMemoryStore      = (*Provider)(nil)
 )
 
 // NewProvider creates a new Claude CLI provider.
@@ -74,6 +75,16 @@ func (p *Provider) NativeSkills() bool {
 // SessionSize returns the size of the latest session transcript for dir.
 func (p *Provider) SessionSize(dir string) (int64, bool) {
 	return SessionSize(dir)
+}
+
+// AutoMemoryDir returns where Claude keeps the auto memory of dir.
+func (p *Provider) AutoMemoryDir(dir string) (string, error) {
+	return AutoMemoryDir(dir)
+}
+
+// ClearAutoMemory moves the auto memory of dir aside.
+func (p *Provider) ClearAutoMemory(dir string) error {
+	return ClearAutoMemory(dir)
 }
 
 // ArchiveSession archives the session history for dir so the next run starts fresh.

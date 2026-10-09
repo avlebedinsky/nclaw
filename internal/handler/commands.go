@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -20,6 +22,8 @@ import (
 	"github.com/nickalie/nclaw/internal/skills"
 )
 
+const autoMemoryIndex = "MEMORY.md"
+
 var commandRe = regexp.MustCompile(`^/([a-zA-Z0-9_]{1,32})(?:@([A-Za-z0-9_]+))?(?:\s|$)`)
 
 // Commands lists the bot commands handled by nclaw itself, for SetMyCommands.
@@ -30,6 +34,7 @@ var Commands = []models.BotCommand{
 	{Command: "tasks", Description: "Задачи по расписанию в этом чате"},
 	{Command: "model", Description: "Выбрать модель для этого чата"},
 	{Command: "skills", Description: "Какие скиллы доступны здесь"},
+	{Command: "memory", Description: "Что бот помнит об этом чате"},
 }
 
 // LoginCommand is offered only in the admin chat, where /login works.
@@ -84,6 +89,9 @@ func (h *Handler) commandFunc(name string) func(chatqueue.Key) {
 	}
 	if h.SkillDirs != nil {
 		commands["skills"] = h.listSkills
+	}
+	if h.Invoker.HasMemory() {
+		commands["memory"] = h.memory
 	}
 	if h.Logins != nil {
 		commands["login"] = h.login
@@ -247,6 +255,90 @@ func (h *Handler) modelView(key chatqueue.Key) (string, buttons.Keyboard) {
 	current := h.Invoker.Model(key.ChatID, key.ThreadID)
 	text := "Модель в этом чате: " + buttons.ModelName(current) + "."
 	return text, buttons.Models(h.Invoker.Models(), current)
+}
+
+func (h *Handler) memory(key chatqueue.Key) {
+	go func() {
+		text, kb := h.memoryView(key)
+		h.sendWithin(key, text, kb, 15*time.Second)
+	}()
+}
+
+func (h *Handler) memoryView(key chatqueue.Key) (string, buttons.Keyboard) {
+	var sections []string
+	var kb buttons.Keyboard
+	if dir, ok := h.Invoker.AutoMemoryDir(key.ChatID, key.ThreadID); ok {
+		if s := autoMemorySection(dir); s != "" {
+			sections = append(sections, s)
+			kb = buttons.Memory()
+		}
+	}
+	shared, own := h.Invoker.MemoryFiles(key.ChatID, key.ThreadID)
+	if own != shared {
+		sections = appendNonEmpty(sections, fileSection("📌 Общее для всех топиков группы", shared))
+	}
+	title := "📌 Заметки этого чата"
+	if key.ThreadID != 0 {
+		title = "📌 Заметки этого топика"
+	}
+	sections = appendNonEmpty(sections, fileSection(title, own))
+	if len(sections) == 0 {
+		return "Здесь пока ничего не запомнено.", nil
+	}
+	return strings.Join(sections, "\n\n"), kb
+}
+
+func autoMemorySection(dir string) string {
+	notes := memoryNotes(dir)
+	index := readText(filepath.Join(dir, autoMemoryIndex))
+	if index == "" && len(notes) == 0 {
+		return ""
+	}
+	lines := []string{"🧠 Память этого разговора:"}
+	if index != "" {
+		lines = append(lines, shorten(index, 1500))
+	}
+	if len(notes) > 0 {
+		lines = append(lines, "Файлы заметок: "+strings.Join(notes, ", "))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func memoryNotes(dir string) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var notes []string
+	for _, e := range entries {
+		if !e.IsDir() && e.Name() != autoMemoryIndex {
+			notes = append(notes, e.Name())
+		}
+	}
+	return notes
+}
+
+func fileSection(title, path string) string {
+	text := readText(path)
+	if path == "" || text == "" {
+		return ""
+	}
+	return title + " (" + filepath.Base(path) + "):\n" + shorten(text, 1000)
+}
+
+func readText(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+func appendNonEmpty(list []string, s string) []string {
+	if s == "" {
+		return list
+	}
+	return append(list, s)
 }
 
 func (h *Handler) listSkills(key chatqueue.Key) {
