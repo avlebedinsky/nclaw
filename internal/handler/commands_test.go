@@ -121,8 +121,8 @@ func TestStopCommand_CancelsRunningRequest(t *testing.T) {
 	waitQueue(t, h)
 
 	require.Eventually(t, func() bool { return len(sent.all()) == 1 }, 5*time.Second, 10*time.Millisecond)
-	assert.Contains(t, sent.all()[0], "⏹ Stopped your request after")
-	assert.Contains(t, sent.all()[0], "Dropped 1 queued message(s).")
+	assert.Contains(t, sent.all()[0], "⏹ Остановлено через")
+	assert.Contains(t, sent.all()[0], "Убрано из очереди сообщений: 1.")
 }
 
 func TestStopCommand_Idle(t *testing.T) {
@@ -133,7 +133,7 @@ func TestStopCommand_Idle(t *testing.T) {
 	h.Command(context.Background(), nil, commandUpdate("/stop"))
 
 	require.Eventually(t, func() bool { return len(sent.all()) == 1 }, 5*time.Second, 10*time.Millisecond)
-	assert.Equal(t, "Nothing to stop.", sent.all()[0])
+	assert.Equal(t, "Останавливать нечего.", sent.all()[0])
 }
 
 func TestNewCommand_StartsFreshConversation(t *testing.T) {
@@ -150,20 +150,20 @@ func TestNewCommand_StartsFreshConversation(t *testing.T) {
 	h.Default(context.Background(), nil, commandUpdate("hello again"))
 	waitQueue(t, h)
 
-	assert.Equal(t, []string{"🆕 New conversation started.", "fresh"}, sent.all())
+	assert.Equal(t, []string{"🆕 Начат новый разговор.", "fresh"}, sent.all())
 }
 
 func TestStatusText(t *testing.T) {
 	idle := statusText(&chatqueue.Snapshot{}, 0, false, 0, "claude")
-	assert.Equal(t, "💤 Idle.\nBackend: claude.", idle)
+	assert.Equal(t, "💤 Сейчас ничего не выполняется.\nБэкенд: claude.", idle)
 
 	busy := statusText(&chatqueue.Snapshot{
 		Running: true, Kind: chatqueue.KindUser, Batch: 3, Started: time.Now().Add(-90 * time.Second),
 		PendingUser: 2, PendingJobs: 1,
 	}, 5<<20, true, 10<<20, "claude")
-	assert.Contains(t, busy, "▶️ Running your request for 1m30s. (3 messages merged)")
-	assert.Contains(t, busy, "Queued: 2 message(s), 1 task/webhook run(s).")
-	assert.Contains(t, busy, "Session: 5.0 MB of 10.0 MB (50%).")
+	assert.Contains(t, busy, "▶️ Выполняется ваш запрос, уже 1 мин 30 с. Сообщений в одном запросе: 3.")
+	assert.Contains(t, busy, "В очереди: сообщений — 2, задач и вебхуков — 1.")
+	assert.Contains(t, busy, "Сессия: 5.0 МБ из 10.0 МБ (50%).")
 }
 
 func TestStatusCommand(t *testing.T) {
@@ -174,7 +174,7 @@ func TestStatusCommand(t *testing.T) {
 	h.Command(context.Background(), nil, commandUpdate("/status"))
 
 	require.Eventually(t, func() bool { return len(sent.all()) == 1 }, 5*time.Second, 10*time.Millisecond)
-	assert.Equal(t, "💤 Idle.\nBackend: mock.", sent.all()[0])
+	assert.Equal(t, "💤 Сейчас ничего не выполняется.\nБэкенд: mock.", sent.all()[0])
 }
 
 func TestStatusCommand_ShowsSignInExpiry(t *testing.T) {
@@ -186,21 +186,21 @@ func TestStatusCommand_ShowsSignInExpiry(t *testing.T) {
 	h.Command(context.Background(), nil, commandUpdate("/status"))
 
 	require.Eventually(t, func() bool { return len(sent.all()) == 1 }, 5*time.Second, 10*time.Millisecond)
-	assert.Equal(t, "💤 Idle.\nBackend: mock.\nClaude sign-in: valid until Fri 9 Oct 18:06 MSK (5 days left).", sent.all()[0])
+	assert.Equal(t, "💤 Сейчас ничего не выполняется.\nБэкенд: mock.\nClaude sign-in: valid until Fri 9 Oct 18:06 MSK (5 days left).", sent.all()[0])
 }
 
 func TestHumanBytes(t *testing.T) {
-	assert.Equal(t, "512 B", humanBytes(512))
-	assert.Equal(t, "1.5 KB", humanBytes(1536))
-	assert.Equal(t, "2.0 MB", humanBytes(2<<20))
+	assert.Equal(t, "512 Б", humanBytes(512))
+	assert.Equal(t, "1.5 КБ", humanBytes(1536))
+	assert.Equal(t, "2.0 МБ", humanBytes(2<<20))
 }
 
 func TestShutdownText(t *testing.T) {
-	assert.Equal(t, "♻️ The bot is restarting and your request was interrupted. Please send it again in a minute — the conversation is kept.",
+	assert.Equal(t, "♻️ Бот перезапускается, ваш запрос прерван. Отправьте его ещё раз через минуту — разговор сохранится.",
 		shutdownText(chatqueue.Interrupted{Running: true, Kind: chatqueue.KindUser}))
-	assert.Equal(t, "♻️ The bot is restarting; a scheduled task in progress was interrupted. 2 queued message(s) were not processed.",
+	assert.Equal(t, "♻️ Бот перезапускается, прервано: задача по расписанию. Не обработаны сообщения из очереди: 2.",
 		shutdownText(chatqueue.Interrupted{Running: true, Kind: chatqueue.KindScheduled, DroppedUser: 2}))
-	assert.Equal(t, "♻️ The bot is restarting. 1 queued message(s) were not processed.",
+	assert.Equal(t, "♻️ Бот перезапускается. Не обработаны сообщения из очереди: 1.",
 		shutdownText(chatqueue.Interrupted{DroppedUser: 1}))
 	assert.Empty(t, shutdownText(chatqueue.Interrupted{DroppedJobs: 3}))
 }
@@ -222,5 +222,5 @@ func TestShutdown_InterruptsRunAndNotifiesChat(t *testing.T) {
 	waitQueue(t, h)
 
 	require.Len(t, sent.all(), 1)
-	assert.Contains(t, sent.all()[0], "your request was interrupted")
+	assert.Contains(t, sent.all()[0], "ваш запрос прерван")
 }

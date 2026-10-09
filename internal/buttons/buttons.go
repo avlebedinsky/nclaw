@@ -58,7 +58,7 @@ const (
 
 var (
 	snoozes     = []time.Duration{15 * time.Minute, time.Hour, 24 * time.Hour}
-	snoozeLabel = map[time.Duration]string{15 * time.Minute: "+15 min", time.Hour: "+1 h", 24 * time.Hour: "Tomorrow"}
+	snoozeLabel = map[time.Duration]string{15 * time.Minute: "+15 мин", time.Hour: "+1 час", 24 * time.Hour: "Завтра"}
 	taskCodes   = map[string]string{TaskPause: "p", TaskResume: "r", TaskCancel: "c"}
 )
 
@@ -85,7 +85,7 @@ func Choices(labels []string) Keyboard {
 // Reminder returns the buttons of a reminder: done, and snooze for 15 minutes, an hour or a day.
 func Reminder() Keyboard {
 	row := make([]Button, 0, 1+len(snoozes))
-	row = append(row, Button{Text: "✅ Done", Data: "d"})
+	row = append(row, Button{Text: "✅ Готово", Data: "d"})
 	for _, d := range snoozes {
 		row = append(row, Button{Text: snoozeLabel[d], Data: fmt.Sprintf("z:%d", int(d.Minutes()))})
 	}
@@ -95,9 +95,9 @@ func Reminder() Keyboard {
 // Progress returns the buttons of a run's status message; pending is the number of
 // messages that arrived while the run was going on.
 func Progress(pending int) Keyboard {
-	row := []Button{{Text: "⏹ Stop", Data: "s"}}
+	row := []Button{{Text: "⏹ Стоп", Data: "s"}}
 	if pending > 0 {
-		row = append(row, Button{Text: fmt.Sprintf("⏭ Answer new (%d)", pending), Data: "n"})
+		row = append(row, Button{Text: fmt.Sprintf("⏭ Ответить на новые (%d)", pending), Data: "n"})
 	}
 	return Keyboard{row}
 }

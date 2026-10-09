@@ -62,6 +62,7 @@ Three input channels (handler, scheduler, webhook) put their work into a per-cha
 - `internal/draft/` - Live Telegram draft of the answer being written, for private chats
 - `internal/authwatch/` - Warns the admin chat before the backend's stored sign-in expires
 - `internal/transcribe/` - Voice/video-note transcription with ffmpeg + whisper.cpp
+- `internal/ru/` - Russian dates ("пн 5 окт 15:04"), durations and plural forms for the bot's own messages
 - `internal/skills/` - Installs missing bundled skills into the CLI skills dirs at startup and updates the copies it made unless they were edited since (hashes in `{data_dir}/.nclaw-skills.json`)
 - `internal/blocks/` - Command block patterns (`nclaw:schedule`, `nclaw:webhook`, `nclaw:sendfile`, `nclaw:buttons`) shared by all packages
 - `internal/pipeline/` - Unified post-processing: block execution, stripping, sendfile, reply delivery
@@ -121,7 +122,10 @@ Callback data stays under Telegram's 64 bytes: `c:<i>` answer choice, `d` remind
 - ⏹ Stop works like `/stop`; ⏭ Answer new appears while user messages wait and calls `chatqueue.Interrupt`, which cancels the running user batch with `ErrInterrupted` (no reply) and keeps the queue;
 - task buttons go through the scheduler's ownership check (`TaskAction`) and redraw the `/tasks` list in place.
 
-Unknown or stale data answers "This button no longer works." The agent learns about `nclaw:buttons` from `telegram.Prompt`.
+Unknown or stale data answers "Эта кнопка больше не работает." The agent learns about `nclaw:buttons` from `telegram.Prompt`.
+
+### Interface Language
+Everything nclaw writes itself — button labels, toasts, command replies, the command menu, sign-in and task alerts, block status lines — is in Russian; `internal/ru` formats dates, durations and plural forms. Text addressed to the agent (prompt notes such as `[Pressed a button…]`, the system prompt, `FormatTaskList`) stays in English.
 
 ## Configuration
 

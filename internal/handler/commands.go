@@ -16,20 +16,21 @@ import (
 	"github.com/nickalie/nclaw/internal/chatqueue"
 	"github.com/nickalie/nclaw/internal/model"
 	"github.com/nickalie/nclaw/internal/pipeline"
+	"github.com/nickalie/nclaw/internal/ru"
 )
 
 var commandRe = regexp.MustCompile(`^/([a-zA-Z0-9_]{1,32})(?:@([A-Za-z0-9_]+))?(?:\s|$)`)
 
 // Commands lists the bot commands handled by nclaw itself, for SetMyCommands.
 var Commands = []models.BotCommand{
-	{Command: "stop", Description: "Stop the current run and drop queued messages"},
-	{Command: "new", Description: "Start a new conversation"},
-	{Command: "status", Description: "Show what the bot is doing in this chat"},
-	{Command: "tasks", Description: "List and manage this chat's scheduled tasks"},
+	{Command: "stop", Description: "Остановить ответ и очистить очередь"},
+	{Command: "new", Description: "Начать новый разговор"},
+	{Command: "status", Description: "Что бот сейчас делает в этом чате"},
+	{Command: "tasks", Description: "Задачи по расписанию в этом чате"},
 }
 
 // LoginCommand is offered only in the admin chat, where /login works.
-var LoginCommand = models.BotCommand{Command: "login", Description: "Sign the bot in again"}
+var LoginCommand = models.BotCommand{Command: "login", Description: "Заново войти в Claude"}
 
 func parseCommand(text, botUsername string) (name string, forMe, ok bool) {
 	m := commandRe.FindStringSubmatch(text)
@@ -100,17 +101,17 @@ func (h *Handler) stop(key chatqueue.Key) {
 
 func stopText(res chatqueue.StopResult) string {
 	if !res.Canceled && res.DroppedUser == 0 && res.DroppedJobs == 0 {
-		return "Nothing to stop."
+		return "Останавливать нечего."
 	}
 	var parts []string
 	if res.Canceled {
-		parts = append(parts, fmt.Sprintf("⏹ Stopped %s after %s.", kindName(res.Kind), res.Elapsed.Round(time.Second)))
+		parts = append(parts, fmt.Sprintf("⏹ Остановлено через %s: %s.", ru.Duration(res.Elapsed), kindName(res.Kind)))
 	}
 	if res.DroppedUser > 0 {
-		parts = append(parts, fmt.Sprintf("Dropped %d queued message(s).", res.DroppedUser))
+		parts = append(parts, fmt.Sprintf("Убрано из очереди сообщений: %d.", res.DroppedUser))
 	}
 	if res.DroppedJobs > 0 {
-		parts = append(parts, fmt.Sprintf("Dropped %d queued task/webhook run(s).", res.DroppedJobs))
+		parts = append(parts, fmt.Sprintf("Убрано из очереди задач и вебхуков: %d.", res.DroppedJobs))
 	}
 	return strings.Join(parts, " ")
 }
@@ -118,15 +119,15 @@ func stopText(res chatqueue.StopResult) string {
 func (h *Handler) newSession(key chatqueue.Key) {
 	job := chatqueue.Job{Kind: chatqueue.KindControl, Label: "new session", Fn: func(context.Context) {
 		h.cutOff.Delete(key)
-		text := "🆕 New conversation started."
+		text := "🆕 Начат новый разговор."
 		if err := h.Invoker.ResetSession(key.ChatID, key.ThreadID); err != nil {
 			log.Printf("handler: reset session chat=%d thread=%d: %v", key.ChatID, key.ThreadID, err)
-			text = "Could not start a new conversation: " + err.Error()
+			text = "Не удалось начать новый разговор: " + err.Error()
 		}
 		h.notify(key, text)
 	}}
 	if _, err := h.Queue.Submit(key, job); err != nil {
-		go h.notify(key, "Could not start a new conversation: "+err.Error())
+		go h.notify(key, "Не удалось начать новый разговор: "+err.Error())
 	}
 }
 
@@ -143,26 +144,26 @@ func (h *Handler) status(key chatqueue.Key) {
 }
 
 func statusText(snap *chatqueue.Snapshot, size int64, hasSize bool, maxBytes int64, backend string) string {
-	lines := []string{"💤 Idle."}
+	lines := []string{"💤 Сейчас ничего не выполняется."}
 	if snap.Running {
-		lines[0] = fmt.Sprintf("▶️ Running %s for %s.", kindName(snap.Kind), time.Since(snap.Started).Round(time.Second))
+		lines[0] = fmt.Sprintf("▶️ Выполняется %s, уже %s.", kindName(snap.Kind), ru.Duration(time.Since(snap.Started)))
 		if snap.Kind == chatqueue.KindUser && snap.Batch > 1 {
-			lines[0] += fmt.Sprintf(" (%d messages merged)", snap.Batch)
+			lines[0] += fmt.Sprintf(" Сообщений в одном запросе: %d.", snap.Batch)
 		}
 	}
 	if snap.PendingUser > 0 || snap.PendingJobs > 0 {
-		lines = append(lines, fmt.Sprintf("Queued: %d message(s), %d task/webhook run(s).", snap.PendingUser, snap.PendingJobs))
+		lines = append(lines, fmt.Sprintf("В очереди: сообщений — %d, задач и вебхуков — %d.", snap.PendingUser, snap.PendingJobs))
 	}
 	if hasSize {
 		lines = append(lines, sessionLine(size, maxBytes))
 	}
-	return strings.Join(append(lines, "Backend: "+backend+"."), "\n")
+	return strings.Join(append(lines, "Бэкенд: "+backend+"."), "\n")
 }
 
 func sessionLine(size, maxBytes int64) string {
-	line := "Session: " + humanBytes(size)
+	line := "Сессия: " + humanBytes(size)
 	if maxBytes > 0 {
-		line += fmt.Sprintf(" of %s (%d%%)", humanBytes(maxBytes), size*100/maxBytes)
+		line += fmt.Sprintf(" из %s (%d%%)", humanBytes(maxBytes), size*100/maxBytes)
 	}
 	return line + "."
 }
@@ -170,24 +171,24 @@ func sessionLine(size, maxBytes int64) string {
 func humanBytes(n int64) string {
 	switch {
 	case n >= 1<<20:
-		return fmt.Sprintf("%.1f MB", float64(n)/(1<<20))
+		return fmt.Sprintf("%.1f МБ", float64(n)/(1<<20))
 	case n >= 1<<10:
-		return fmt.Sprintf("%.1f KB", float64(n)/(1<<10))
+		return fmt.Sprintf("%.1f КБ", float64(n)/(1<<10))
 	default:
-		return fmt.Sprintf("%d B", n)
+		return fmt.Sprintf("%d Б", n)
 	}
 }
 
 func kindName(k chatqueue.Kind) string {
 	switch k {
 	case chatqueue.KindScheduled:
-		return "a scheduled task"
+		return "задача по расписанию"
 	case chatqueue.KindWebhook:
-		return "a webhook request"
+		return "запрос вебхука"
 	case chatqueue.KindControl:
-		return "a control command"
+		return "служебная команда"
 	default:
-		return "your request"
+		return "ваш запрос"
 	}
 }
 
@@ -207,16 +208,16 @@ func shutdownText(item chatqueue.Interrupted) string {
 	var parts []string
 	switch {
 	case item.Running && item.Kind == chatqueue.KindUser:
-		parts = append(parts, "♻️ The bot is restarting and your request was interrupted. "+
-			"Please send it again in a minute — the conversation is kept.")
+		parts = append(parts, "♻️ Бот перезапускается, ваш запрос прерван. "+
+			"Отправьте его ещё раз через минуту — разговор сохранится.")
 	case item.Running:
-		parts = append(parts, "♻️ The bot is restarting; "+kindName(item.Kind)+" in progress was interrupted.")
+		parts = append(parts, "♻️ Бот перезапускается, прервано: "+kindName(item.Kind)+".")
 	}
 	if item.DroppedUser > 0 {
 		if len(parts) == 0 {
-			parts = append(parts, "♻️ The bot is restarting.")
+			parts = append(parts, "♻️ Бот перезапускается.")
 		}
-		parts = append(parts, fmt.Sprintf("%d queued message(s) were not processed.", item.DroppedUser))
+		parts = append(parts, fmt.Sprintf("Не обработаны сообщения из очереди: %d.", item.DroppedUser))
 	}
 	return strings.Join(parts, " ")
 }
@@ -248,12 +249,12 @@ func (h *Handler) tasks(key chatqueue.Key) {
 func (h *Handler) taskList(key chatqueue.Key) (string, buttons.Keyboard) {
 	tasks, err := h.Tasks.ChatTasks(key.ChatID, key.ThreadID)
 	if err != nil {
-		return "Could not list tasks: " + err.Error(), nil
+		return "Не удалось получить задачи: " + err.Error(), nil
 	}
 	if len(tasks) == 0 {
-		return "No scheduled tasks here.", nil
+		return "Здесь нет задач по расписанию.", nil
 	}
-	lines := []string{"Scheduled tasks here:"}
+	lines := []string{"Задачи по расписанию:"}
 	kb := make(buttons.Keyboard, 0, len(tasks))
 	for i := range tasks {
 		t := &tasks[i]
@@ -267,23 +268,31 @@ func (h *Handler) taskList(key chatqueue.Key) (string, buttons.Keyboard) {
 func scheduleText(t *model.ScheduledTask) string {
 	var next string
 	if t.NextRun != nil {
-		next = t.NextRun.Format("Mon 2 Jan 15:04")
+		next = ru.Date(*t.NextRun)
 	}
 	var s string
 	switch t.ScheduleType {
 	case model.ScheduleOnce:
-		s = "once at " + next
+		s = "один раз, " + next
 		next = ""
 	case model.ScheduleCron:
 		s = "cron " + t.ScheduleValue
 	default:
-		s = "every " + t.ScheduleValue
+		s = "раз в " + intervalText(t.ScheduleValue)
 	}
 	if t.Status == model.StatusPaused {
-		return s + ", paused"
+		return s + ", на паузе"
 	}
 	if next != "" {
-		s += ", next " + next
+		s += ", следующий запуск " + next
 	}
 	return s
+}
+
+func intervalText(value string) string {
+	d, err := time.ParseDuration(value)
+	if err != nil {
+		return value
+	}
+	return ru.Duration(d)
 }

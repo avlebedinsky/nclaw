@@ -62,7 +62,8 @@ The recommended way to run NClaw is inside Docker — the container serves as a 
 - **Voice messages** — Voice notes and video notes are transcribed locally with whisper.cpp and handled like typed messages.
 - **Ordered message queue** — Messages sent while the assistant is busy are answered in order, in a single combined run.
 - **Live progress** — A status message shows the agent's current step (e.g. "🔧 Bash: Run the test suite") while it works.
-- **Buttons** — Reminders come with ✅ Done, +15 min, +1 h and Tomorrow buttons. When the assistant asks a short closed question, it offers the answers as buttons, and the one you press comes back to it as your reply. The status message of a running request has ⏹ Stop and, once new messages are waiting, ⏭ Answer new.
+- **Buttons** — Reminders come with buttons to mark them done or snooze them for 15 minutes, an hour or until tomorrow. When the assistant asks a short closed question, it offers the answers as buttons, and the one you press comes back to it as your reply. The status message of a running request has a stop button and, once new messages are waiting, an answer-new button.
+- **Russian interface** — The bot's own messages, buttons and command menu are in Russian; the assistant answers in the language you write in.
 - **Live answer and reactions** — In private chats the answer appears as it is being written (Claude backend), with a stop button. Messages get a reaction while they wait (👀), run (✍), succeed (👌) or fail (💔), and the answer is sent as a reply to the question.
 - **Long answers as a file** — An answer that would take more than three messages arrives as its beginning plus the full text in `answer.md`. Tables are rendered as aligned text, since Telegram cannot display them.
 - **Chat commands** — `/stop` cancels the current run, `/new` starts a fresh conversation, `/status` shows what the bot is doing, `/tasks` lists the chat's scheduled tasks with buttons to pause, resume or cancel them.
@@ -667,7 +668,7 @@ webhook:
 
 Commands work while the assistant is busy and are registered in Telegram's command menu. In groups, `/command@yourbot` is supported; commands addressed to other bots are ignored.
 
-Messages sent while a request is running wait in the chat's queue and are answered together in the next run, in the order they were sent. The status message of the running request has buttons for this: ⏹ Stop works like `/stop`, and ⏭ Answer new (shown once messages are waiting) ends the current request without a reply and answers the waiting messages right away.
+Messages sent while a request is running wait in the chat's queue and are answered together in the next run, in the order they were sent. The status message of the running request has buttons for this: ⏹ Стоп works like `/stop`, and ⏭ Ответить на новые (shown once messages are waiting) ends the current request without a reply and answers the waiting messages right away.
 
 ## Voice messages
 
@@ -685,7 +686,7 @@ Every morning at 8am, give me a weather summary and top news headlines
 At 3pm today, generate a summary of today's git commits
 ```
 
-Tasks persist across restarts. Each task can either continue the existing chat session or run in a fresh isolated context. Plain reminders ("remind me to…") are `notify` tasks: at the scheduled time the bot sends the prepared text right away, without running the agent, so they cost nothing and arrive on time even while the agent is busy. A reminder comes with buttons: ✅ Done closes it, while +15 min, +1 h and Tomorrow send it again later. `/tasks` lists the chat's tasks with buttons to pause, resume or cancel them. If a task fails, the chat gets a message naming the task and the error; a task that can no longer be scheduled after a restart is disabled and reported the same way.
+Tasks persist across restarts. Each task can either continue the existing chat session or run in a fresh isolated context. Plain reminders ("remind me to…") are `notify` tasks: at the scheduled time the bot sends the prepared text right away, without running the agent, so they cost nothing and arrive on time even while the agent is busy. A reminder comes with buttons: ✅ Готово closes it, while +15 мин, +1 час and Завтра send it again later. `/tasks` lists the chat's tasks with buttons to pause, resume or cancel them. If a task fails, the chat gets a message naming the task and the error; a task that can no longer be scheduled after a restart is disabled and reported the same way.
 
 ## Webhooks
 

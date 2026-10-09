@@ -54,7 +54,7 @@ func (l *Logins) take(chatID int64, want *pendingLogin) *pendingLogin {
 
 func (h *Handler) login(key chatqueue.Key) {
 	if key.ChatID != h.Logins.AdminChatID {
-		go h.notify(key, "/login works only in the admin's private chat with the bot.")
+		go h.notify(key, "/login работает только в личном чате администратора с ботом.")
 		return
 	}
 	go h.startLogin(key)
@@ -66,18 +66,18 @@ func (h *Handler) startLogin(key chatqueue.Key) {
 	if err != nil {
 		cancel()
 		log.Printf("handler: start login: %v", err)
-		h.notify(key, "Could not start the sign-in: "+err.Error())
+		h.notify(key, "Не удалось начать вход: "+err.Error())
 		return
 	}
 	p := &pendingLogin{session: session, cancel: cancel}
 	h.Logins.put(key.ChatID, p)
 	context.AfterFunc(ctx, func() {
 		if h.Logins.take(key.ChatID, p) != nil {
-			h.notify(key, "⌛ The sign-in was not finished in time. Send /login to start again.")
+			h.notify(key, "⌛ Вход не завершён вовремя. Отправьте /login, чтобы начать заново.")
 		}
 	})
-	h.notify(key, "🔑 Open this link and sign in with the bot's account:\n"+session.URL()+
-		"\n\nThen send me the code shown at the end as your next message. The link works for 10 minutes.")
+	h.notify(key, "🔑 Откройте ссылку и войдите в аккаунт бота:\n"+session.URL()+
+		"\n\nПотом пришлите следующим сообщением код, который покажут в конце. Ссылка действует 10 минут.")
 }
 
 func (h *Handler) takeLoginCode(msg *models.Message) bool {
@@ -98,11 +98,11 @@ func (h *Handler) finishLogin(key chatqueue.Key, p *pendingLogin, code string) {
 	defer p.cancel()
 	if err := p.session.Submit(code); err != nil {
 		log.Printf("handler: sign-in failed: %v", err)
-		h.notify(key, "❌ Sign-in failed: "+err.Error()+"\nSend /login to try again.")
+		h.notify(key, "❌ Войти не удалось: "+err.Error()+"\nОтправьте /login, чтобы попробовать ещё раз.")
 		return
 	}
 	log.Printf("handler: signed in from chat=%d", key.ChatID)
-	text := "✅ Signed in."
+	text := "✅ Вход выполнен."
 	if h.AuthStatus != nil {
 		if line := h.AuthStatus(); line != "" {
 			text += "\n" + line

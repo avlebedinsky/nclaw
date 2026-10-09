@@ -12,9 +12,10 @@ import (
 	"github.com/nickalie/nclaw/internal/buttons"
 	"github.com/nickalie/nclaw/internal/chatqueue"
 	"github.com/nickalie/nclaw/internal/model"
+	"github.com/nickalie/nclaw/internal/ru"
 )
 
-const staleButton = "This button no longer works."
+const staleButton = "Эта кнопка больше не работает."
 
 // ButtonAPI answers presses on inline buttons and edits the messages that carry them.
 type ButtonAPI interface {
@@ -50,8 +51,8 @@ func (h *Handler) press(q *models.CallbackQuery, msg *models.Message, p buttons.
 	case buttons.Choice:
 		return h.choose(q, msg, key)
 	case buttons.Done:
-		go h.closeButtons(msg, "✅ Done")
-		return "Done"
+		go h.closeButtons(msg, "✅ Готово")
+		return "Готово"
 	case buttons.Snooze:
 		return h.snooze(msg, key, p.After)
 	case buttons.Stop:
@@ -65,7 +66,10 @@ func (h *Handler) press(q *models.CallbackQuery, msg *models.Message, p buttons.
 	}
 }
 
-var taskToasts = map[string]string{buttons.TaskPause: "⏸ Paused", buttons.TaskResume: "▶️ Resumed", buttons.TaskCancel: "🗑 Canceled"}
+var (
+	taskToasts = map[string]string{buttons.TaskPause: "⏸ На паузе", buttons.TaskResume: "▶️ Возобновлена", buttons.TaskCancel: "🗑 Удалена"}
+	taskVerbs  = map[string]string{buttons.TaskPause: "приостановить", buttons.TaskResume: "возобновить", buttons.TaskCancel: "удалить"}
+)
 
 func (h *Handler) taskButton(msg *models.Message, key chatqueue.Key, p buttons.Press) string {
 	if h.Tasks == nil {
@@ -73,7 +77,7 @@ func (h *Handler) taskButton(msg *models.Message, key chatqueue.Key, p buttons.P
 	}
 	toast := taskToasts[p.Action]
 	if err := h.Tasks.TaskAction(p.Action, p.TaskID, key.ChatID, key.ThreadID); err != nil {
-		toast = "Could not " + p.Action + ": " + err.Error()
+		toast = "Не удалось " + taskVerbs[p.Action] + ": " + err.Error()
 	}
 	text, kb := h.taskList(key)
 	go h.edit(msg, text, nil, kb)
@@ -82,12 +86,12 @@ func (h *Handler) taskButton(msg *models.Message, key chatqueue.Key, p buttons.P
 
 func (h *Handler) answerNew(key chatqueue.Key) string {
 	if h.Queue.Snapshot(key).PendingUser == 0 {
-		return "No new messages to answer."
+		return "Новых сообщений нет."
 	}
 	if !h.Queue.Interrupt(key) {
-		return "Nothing to interrupt."
+		return "Прерывать нечего."
 	}
-	return "⏭ Answering your new messages."
+	return "⏭ Отвечаю на новые сообщения."
 }
 
 func (h *Handler) choose(q *models.CallbackQuery, msg *models.Message, key chatqueue.Key) string {
@@ -98,7 +102,7 @@ func (h *Handler) choose(q *models.CallbackQuery, msg *models.Message, key chatq
 	in := Inbound{msgID: msg.ID, sender: pressedBy(msg, &q.From), text: choicePrompt(msg.Text, label)}
 	if err := h.Queue.Enqueue(key, in, messageSettle); err != nil {
 		log.Printf("handler: chat=%d thread=%d choice not queued: %v", key.ChatID, key.ThreadID, err)
-		return "Could not send: " + err.Error()
+		return "Не удалось отправить: " + err.Error()
 	}
 	go h.closeButtons(msg, "→ "+label)
 	return label
@@ -122,9 +126,9 @@ func (h *Handler) snooze(msg *models.Message, key chatqueue.Key, after time.Dura
 	at, err := h.Tasks.Snooze(key.ChatID, key.ThreadID, msg.Text, after)
 	if err != nil {
 		log.Printf("handler: snooze in chat=%d thread=%d: %v", key.ChatID, key.ThreadID, err)
-		return "Could not snooze: " + err.Error()
+		return "Не удалось отложить: " + err.Error()
 	}
-	note := "⏰ Snoozed until " + when(at, time.Now())
+	note := "⏰ Отложено до " + when(at, time.Now())
 	go h.closeButtons(msg, note)
 	return note
 }
@@ -134,7 +138,7 @@ func when(t, now time.Time) string {
 	if t.Year() == now.Year() && t.YearDay() == now.YearDay() {
 		return t.Format("15:04")
 	}
-	return t.Format("Mon 2 Jan 15:04")
+	return ru.Date(t)
 }
 
 func (h *Handler) closeButtons(msg *models.Message, note string) {

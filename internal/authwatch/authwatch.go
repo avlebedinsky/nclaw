@@ -8,6 +8,8 @@ import (
 	"log"
 	"sync"
 	"time"
+
+	"github.com/nickalie/nclaw/internal/ru"
 )
 
 const (
@@ -99,22 +101,23 @@ func (w *Watcher) Status() string {
 	}
 	now := w.opts.Now()
 	if !expiry.After(now) {
-		return fmt.Sprintf("%s sign-in: expired on %s.", w.opts.Name, w.when(expiry))
+		return fmt.Sprintf("Вход в %s истёк %s.", w.opts.Name, w.when(expiry))
 	}
-	return fmt.Sprintf("%s sign-in: valid until %s (%s left).", w.opts.Name, w.when(expiry), humanDuration(expiry.Sub(now)))
+	return fmt.Sprintf("Вход в %s действует до %s (осталось %s).", w.opts.Name, w.when(expiry), humanDuration(expiry.Sub(now)))
 }
 
 func (w *Watcher) warning(expiry, now time.Time) string {
 	if !expiry.After(now) {
-		return fmt.Sprintf("⛔ The bot's %s sign-in expired on %s, so its replies will fail. %s",
+		return fmt.Sprintf("⛔ Вход бота в %s истёк %s, ответы будут приходить с ошибкой. %s",
 			w.opts.Name, w.when(expiry), w.opts.RenewHint)
 	}
-	return fmt.Sprintf("⚠️ The bot's %s sign-in expires in %s (%s). %s",
+	return fmt.Sprintf("⚠️ Вход бота в %s истекает через %s (%s). %s",
 		w.opts.Name, humanDuration(expiry.Sub(now)), w.when(expiry), w.opts.RenewHint)
 }
 
 func (w *Watcher) when(t time.Time) string {
-	return t.In(w.opts.Location).Format("Mon 2 Jan 15:04 MST")
+	t = t.In(w.opts.Location)
+	return ru.Date(t) + " " + t.Format("MST")
 }
 
 func levelAt(remaining time.Duration) int {
@@ -129,17 +132,13 @@ func levelAt(remaining time.Duration) int {
 
 func humanDuration(d time.Duration) string {
 	switch {
-	case d >= 2*day:
-		return fmt.Sprintf("%d days", int(d/day))
 	case d >= day:
-		return "1 day"
-	case d >= 2*time.Hour:
-		return fmt.Sprintf("%d hours", int(d/time.Hour))
+		n := int(d / day)
+		return fmt.Sprintf("%d %s", n, ru.Plural(n, "день", "дня", "дней"))
 	case d >= time.Hour:
-		return "1 hour"
-	case d >= 2*time.Minute:
-		return fmt.Sprintf("%d minutes", int(d/time.Minute))
+		n := int(d / time.Hour)
+		return fmt.Sprintf("%d %s", n, ru.Plural(n, "час", "часа", "часов"))
 	default:
-		return "1 minute"
+		return fmt.Sprintf("%d мин", max(int(d/time.Minute), 1))
 	}
 }

@@ -79,21 +79,21 @@ func TestExecuteBlocks_CreateTaskMissingFields(t *testing.T) {
 	s := setupTestScheduler(t)
 	text := "```nclaw:schedule\n{\"action\":\"create\",\"prompt\":\"\"}\n```"
 	result := s.ExecuteBlocks(text, 100, 0)
-	assert.Contains(t, result, "Schedule error")
+	assert.Contains(t, result, "Ошибка расписания")
 }
 
 func TestExecuteBlocks_InvalidJSON(t *testing.T) {
 	s := setupTestScheduler(t)
 	text := "```nclaw:schedule\n{invalid json}\n```"
 	result := s.ExecuteBlocks(text, 100, 0)
-	assert.Contains(t, result, "Schedule error")
+	assert.Contains(t, result, "Ошибка расписания")
 }
 
 func TestExecuteBlocks_UnknownAction(t *testing.T) {
 	s := setupTestScheduler(t)
 	text := "```nclaw:schedule\n{\"action\":\"explode\"}\n```"
 	result := s.ExecuteBlocks(text, 100, 0)
-	assert.Contains(t, result, "Schedule error")
+	assert.Contains(t, result, "Ошибка расписания")
 	assert.Contains(t, result, "unknown action")
 }
 
@@ -187,7 +187,7 @@ func TestExecuteBlocks_Error(t *testing.T) {
 	s := setupTestScheduler(t)
 	text := "```nclaw:schedule\n{invalid json}\n```"
 	result := s.ExecuteBlocks(text, 100, 0)
-	assert.Contains(t, result, "[Schedule error:")
+	assert.Contains(t, result, "[Ошибка расписания:")
 }
 
 func TestExecuteBlocks_MixedSuccessAndError(t *testing.T) {
@@ -199,7 +199,7 @@ func TestExecuteBlocks_MixedSuccessAndError(t *testing.T) {
 		`{"action":"create","prompt":"ok","type":"interval","value":"1h"}` +
 		"\n```\n```nclaw:schedule\n{bad}\n```"
 	result := s.ExecuteBlocks(text, 100, 0)
-	assert.Contains(t, result, "[Schedule error:")
+	assert.Contains(t, result, "[Ошибка расписания:")
 
 	var tasks []model.ScheduledTask
 	require.NoError(t, s.db.Find(&tasks).Error)

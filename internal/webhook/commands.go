@@ -41,7 +41,7 @@ func (m *Manager) ExecuteBlocks(text string, chatID int64, threadID int) string 
 		msgs = append(msgs, strings.Join(results, "\n"))
 	}
 	if len(errs) > 0 {
-		msgs = append(msgs, "[Webhook error: "+strings.Join(errs, "; ")+"]")
+		msgs = append(msgs, "[Ошибка вебхука: "+strings.Join(errs, "; ")+"]")
 	}
 	return strings.Join(msgs, "\n\n")
 }
@@ -74,7 +74,7 @@ func (m *Manager) createFromCommand(description string, chatID int64, threadID i
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("[Webhook created: %s]", m.WebhookURL(webhook.ID)), nil
+	return fmt.Sprintf("[Вебхук создан: %s]", m.WebhookURL(webhook.ID)), nil
 }
 
 func (m *Manager) deleteFromCommand(webhookID string, chatID int64, threadID int) (string, error) {
@@ -91,7 +91,7 @@ func (m *Manager) deleteFromCommand(webhookID string, chatID int64, threadID int
 	if err := m.Delete(webhookID); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("[Webhook deleted: %s]", webhookID), nil
+	return fmt.Sprintf("[Вебхук удалён: %s]", webhookID), nil
 }
 
 func (m *Manager) listFromCommand(chatID int64, threadID int) (string, error) {
@@ -100,13 +100,13 @@ func (m *Manager) listFromCommand(chatID int64, threadID int) (string, error) {
 		return "", err
 	}
 	if len(webhooks) == 0 {
-		return "[No webhooks registered]", nil
+		return "[Вебхуков нет]", nil
 	}
 
 	var b strings.Builder
-	b.WriteString("[Registered webhooks:\n")
+	b.WriteString("[Вебхуки:\n")
 	for _, wh := range webhooks {
-		fmt.Fprintf(&b, "- %s: %s (status: %s, url: %s)\n", wh.ID, wh.Description, wh.Status, m.WebhookURL(wh.ID))
+		fmt.Fprintf(&b, "- %s: %s (статус: %s, адрес: %s)\n", wh.ID, wh.Description, wh.Status, m.WebhookURL(wh.ID))
 	}
 	b.WriteString("]")
 	return b.String(), nil

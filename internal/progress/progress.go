@@ -15,6 +15,7 @@ import (
 
 	"github.com/nickalie/nclaw/internal/buttons"
 	"github.com/nickalie/nclaw/internal/cli"
+	"github.com/nickalie/nclaw/internal/ru"
 )
 
 var secretRe = regexp.MustCompile(
@@ -169,7 +170,7 @@ func (r *Reporter) pendingLocked(now time.Time, keys string) (text string, msgID
 	if r.steps == 0 || now.Before(r.nextAllowed) {
 		return "", 0, false
 	}
-	text = fmt.Sprintf("%s\nstep %d · %s", r.step, r.steps, now.Sub(r.started).Round(time.Second))
+	text = fmt.Sprintf("%s\nшаг %d · %s", r.step, r.steps, ru.Duration(now.Sub(r.started)))
 	if r.msgID == 0 {
 		return text, 0, true
 	}

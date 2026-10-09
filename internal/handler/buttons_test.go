@@ -127,10 +127,10 @@ func TestButton_DoneClosesTheReminder(t *testing.T) {
 
 	h.Button(context.Background(), nil, press(reminder(), "d"))
 
-	assert.Equal(t, "Done", fb.waitAnswer(t))
+	assert.Equal(t, "Готово", fb.waitAnswer(t))
 	e := fb.waitEdit(t)
 	assert.Equal(t, 42, e.msgID)
-	assert.Equal(t, "⏰ Позвонить стоматологу\n\n✅ Done", e.text)
+	assert.Equal(t, "⏰ Позвонить стоматологу\n\n✅ Готово", e.text)
 	assert.Equal(t, reminder().Entities, e.entities)
 	assert.Nil(t, e.kb)
 }
@@ -143,7 +143,7 @@ func TestButton_SnoozeSchedulesTheSameText(t *testing.T) {
 
 	require.Len(t, ft.snoozes, 1)
 	assert.Equal(t, snoozed{100, 7, "⏰ Позвонить стоматологу", time.Hour}, ft.snoozes[0])
-	want := "⏰ Snoozed until " + when(ft.at, time.Now())
+	want := "⏰ Отложено до " + when(ft.at, time.Now())
 	assert.Equal(t, want, fb.waitAnswer(t))
 	assert.Equal(t, "⏰ Позвонить стоматологу\n\n"+want, fb.waitEdit(t).text)
 }
@@ -154,7 +154,7 @@ func TestButton_SnoozeFailureKeepsTheButtons(t *testing.T) {
 
 	h.Button(context.Background(), nil, press(reminder(), "z:15"))
 
-	assert.Equal(t, "Could not snooze: db is down", fb.waitAnswer(t))
+	assert.Equal(t, "Не удалось отложить: db is down", fb.waitAnswer(t))
 	fb.mu.Lock()
 	defer fb.mu.Unlock()
 	assert.Empty(t, fb.edits)
@@ -181,7 +181,7 @@ func TestButton_InaccessibleMessageOrUnknownData(t *testing.T) {
 func TestWhen(t *testing.T) {
 	now := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
 	assert.Equal(t, "13:45", when(time.Date(2026, 10, 4, 13, 45, 0, 0, time.UTC), now))
-	assert.Equal(t, "Mon 5 Oct 12:00", when(time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC), now))
+	assert.Equal(t, "пн 5 окт 12:00", when(time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC), now))
 }
 
 func TestAllowChat_ButtonPresses(t *testing.T) {
@@ -310,7 +310,7 @@ func TestButton_AnswerNewInterruptsAndAnswersTheNewMessage(t *testing.T) {
 
 	h.Button(context.Background(), nil, press(statusMessage(), "n"))
 
-	assert.Equal(t, "⏭ Answering your new messages.", fb.waitAnswer(t))
+	assert.Equal(t, "⏭ Отвечаю на новые сообщения.", fb.waitAnswer(t))
 	assert.Contains(t, <-client.started, interruptedNote+"no, just the summary")
 	waitQueue(t, h)
 	assert.Equal(t, []string{"done with the new request"}, sent.all())
@@ -321,7 +321,7 @@ func TestButton_AnswerNewWithoutNewMessagesDoesNothing(t *testing.T) {
 
 	h.Button(context.Background(), nil, press(statusMessage(), "n"))
 
-	assert.Equal(t, "No new messages to answer.", fb.waitAnswer(t))
+	assert.Equal(t, "Новых сообщений нет.", fb.waitAnswer(t))
 	assert.True(t, h.Queue.Snapshot(testKey).Running)
 	h.Queue.Stop(testKey)
 	waitQueue(t, h)
@@ -333,7 +333,7 @@ func TestButton_StopStopsTheRunAndDropsTheQueue(t *testing.T) {
 
 	h.Button(context.Background(), nil, press(statusMessage(), "s"))
 
-	assert.Contains(t, fb.waitAnswer(t), "⏹ Stopped your request after")
+	assert.Contains(t, fb.waitAnswer(t), "⏹ Остановлено через")
 	waitQueue(t, h)
 	assert.Empty(t, sent.all())
 }
@@ -377,10 +377,10 @@ func TestTasksCommand_ListsTheTasksWithButtons(t *testing.T) {
 	h.Command(context.Background(), nil, commandUpdate("/tasks"))
 
 	m := nextSend(t, sends)
-	assert.Equal(t, "Scheduled tasks here:\n"+
-		"1. Утренняя сводка — cron 0 9 * * *, next Mon 5 Oct 09:00\n"+
-		"2. Проверить почту — every 2h\n"+
-		"3. ⏰ Полить цветы — once at Mon 5 Oct 09:00, paused", m.text)
+	assert.Equal(t, "Задачи по расписанию:\n"+
+		"1. Утренняя сводка — cron 0 9 * * *, следующий запуск пн 5 окт 09:00\n"+
+		"2. Проверить почту — раз в 2 ч\n"+
+		"3. ⏰ Полить цветы — один раз, пн 5 окт 09:00, на паузе", m.text)
 	assert.Equal(t, buttons.Keyboard{buttons.Task(1, "t1", false), buttons.Task(2, "t2", false), buttons.Task(3, "t3", true)}, m.dest.Buttons)
 	assert.Equal(t, int64(100), m.dest.ChatID)
 }
@@ -392,7 +392,7 @@ func TestTasksCommand_NoTasks(t *testing.T) {
 	h.Command(context.Background(), nil, commandUpdate("/tasks"))
 
 	m := nextSend(t, sends)
-	assert.Equal(t, "No scheduled tasks here.", m.text)
+	assert.Equal(t, "Здесь нет задач по расписанию.", m.text)
 	assert.Nil(t, m.dest.Buttons)
 }
 
@@ -404,7 +404,7 @@ func TestTasksCommand_UnavailableWithoutScheduler(t *testing.T) {
 
 func taskList() *models.Message {
 	return &models.Message{
-		ID: 5, Text: "Scheduled tasks here:\n1. https://example.com", Chat: models.Chat{ID: 100},
+		ID: 5, Text: "Задачи по расписанию:\n1. https://example.com", Chat: models.Chat{ID: 100},
 		Entities: []models.MessageEntity{{Type: models.MessageEntityTypeURL, Offset: 25, Length: 19}},
 	}
 }
@@ -415,11 +415,11 @@ func TestButton_TaskActionAppliesAndRedrawsTheList(t *testing.T) {
 
 	h.Button(context.Background(), nil, press(taskList(), "t:p:t1"))
 
-	assert.Equal(t, "⏸ Paused", fb.waitAnswer(t))
+	assert.Equal(t, "⏸ На паузе", fb.waitAnswer(t))
 	assert.Equal(t, []string{"pause:t1"}, ft.actions)
 	e := fb.waitEdit(t)
 	assert.Equal(t, 5, e.msgID)
-	assert.Equal(t, "Scheduled tasks here:\n1. Полить цветы — every 24h, paused", e.text)
+	assert.Equal(t, "Задачи по расписанию:\n1. Полить цветы — раз в 24 ч, на паузе", e.text)
 	assert.Nil(t, e.entities)
 	assert.Equal(t, buttons.Keyboard{buttons.Task(1, "t1", true)}, e.kb)
 }
@@ -430,9 +430,9 @@ func TestButton_TaskActionFailureSaysWhyAndShowsTheCurrentList(t *testing.T) {
 
 	h.Button(context.Background(), nil, press(taskList(), "t:c:t9"))
 
-	assert.Equal(t, "Could not cancel: task not found: t9", fb.waitAnswer(t))
+	assert.Equal(t, "Не удалось удалить: task not found: t9", fb.waitAnswer(t))
 	e := fb.waitEdit(t)
-	assert.Equal(t, "No scheduled tasks here.", e.text)
+	assert.Equal(t, "Здесь нет задач по расписанию.", e.text)
 	assert.Nil(t, e.kb)
 }
 

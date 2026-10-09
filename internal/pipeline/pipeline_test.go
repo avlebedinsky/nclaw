@@ -409,7 +409,7 @@ func TestProcess_WebhooksNotConfigured_WarningAppended(t *testing.T) {
 	assert.Contains(t, ms.calls[0].text, "Here you go.")
 	assert.Contains(t, ms.calls[0].text, "Done!")
 	assert.NotContains(t, ms.calls[0].text, "nclaw:webhook")
-	assert.Contains(t, ms.calls[0].text, "[Webhooks are not configured on this instance]")
+	assert.Contains(t, ms.calls[0].text, "[Вебхуки на этом боте не настроены]")
 }
 
 func TestProcess_WebhooksConfigured_NoWarning(t *testing.T) {

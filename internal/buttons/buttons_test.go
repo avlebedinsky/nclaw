@@ -48,7 +48,7 @@ func TestReminderButtonsDecodeToTheirActions(t *testing.T) {
 	kb := Reminder()
 
 	require.Len(t, kb, 1)
-	labels := []string{"✅ Done", "+15 min", "+1 h", "Tomorrow"}
+	labels := []string{"✅ Готово", "+15 мин", "+1 час", "Завтра"}
 	kinds := []Kind{Done, Snooze, Snooze, Snooze}
 	for i, b := range kb[0] {
 		assert.Equal(t, labels[i], b.Text)
@@ -58,8 +58,8 @@ func TestReminderButtonsDecodeToTheirActions(t *testing.T) {
 }
 
 func TestProgress_AnswerNewOnlyWithPendingMessages(t *testing.T) {
-	assert.Equal(t, Keyboard{{{Text: "⏹ Stop", Data: "s"}}}, Progress(0))
-	assert.Equal(t, Keyboard{{{Text: "⏹ Stop", Data: "s"}, {Text: "⏭ Answer new (2)", Data: "n"}}}, Progress(2))
+	assert.Equal(t, Keyboard{{{Text: "⏹ Стоп", Data: "s"}}}, Progress(0))
+	assert.Equal(t, Keyboard{{{Text: "⏹ Стоп", Data: "s"}, {Text: "⏭ Ответить на новые (2)", Data: "n"}}}, Progress(2))
 }
 
 func TestTask(t *testing.T) {
