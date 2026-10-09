@@ -23,7 +23,15 @@ import (
 	"github.com/nickalie/nclaw/internal/skills"
 )
 
-const autoMemoryIndex = "MEMORY.md"
+const (
+	autoMemoryIndex = "MEMORY.md"
+	helpIntro       = "🤖 Пишите задачу обычным сообщением: текстом, голосом, с файлами или фото. " +
+		"Что придёт, пока бот занят, он прочитает вместе и ответит одним сообщением."
+	helpButtons = "Кнопки:\n" +
+		"• под сообщением о ходе работы — ⏹ Стоп и ⏭ Ответить на новые;\n" +
+		"• под напоминанием — ✅ Готово и отложить на 15 минут, час или до завтра;\n" +
+		"• под вопросом бота — варианты ответа."
+)
 
 var commandRe = regexp.MustCompile(`^/([a-zA-Z0-9_]{1,32})(?:@([A-Za-z0-9_]+))?(?:\s|$)`)
 
@@ -36,6 +44,7 @@ var Commands = []models.BotCommand{
 	{Command: "model", Description: "Выбрать модель для этого чата"},
 	{Command: "skills", Description: "Какие скиллы доступны здесь"},
 	{Command: "memory", Description: "Что бот помнит об этом чате"},
+	{Command: "help", Description: "Что умеет бот"},
 }
 
 // LoginCommand is offered only in the admin chat, where /login works.
@@ -81,7 +90,9 @@ func (h *Handler) StopGeneration(_ context.Context, _ *bot.Bot, update *models.U
 }
 
 func (h *Handler) commandFunc(name string) func(chatqueue.Key) {
-	commands := map[string]func(chatqueue.Key){"stop": h.stop, "new": h.newSession, "status": h.status}
+	commands := map[string]func(chatqueue.Key){
+		"stop": h.stop, "new": h.newSession, "status": h.status, "help": h.help, "start": h.help,
+	}
 	if h.Tasks != nil {
 		commands["tasks"] = h.tasks
 	}
@@ -307,6 +318,24 @@ func (h *Handler) modelView(key chatqueue.Key) (string, buttons.Keyboard) {
 	current := h.Invoker.Model(key.ChatID, key.ThreadID)
 	text := "Модель в этом чате: " + buttons.ModelName(current) + "."
 	return text, buttons.Models(h.Invoker.Models(), current)
+}
+
+func (h *Handler) help(key chatqueue.Key) {
+	lines := []string{helpIntro, "", "Команды:"}
+	for _, c := range Commands {
+		if h.commandFunc(c.Command) != nil {
+			lines = append(lines, "/"+c.Command+" — "+lowerFirst(c.Description))
+		}
+	}
+	go h.notify(key, strings.Join(append(lines, "", helpButtons), "\n"))
+}
+
+func lowerFirst(s string) string {
+	r := []rune(s)
+	if len(r) == 0 {
+		return s
+	}
+	return strings.ToLower(string(r[0])) + string(r[1:])
 }
 
 func (h *Handler) memory(key chatqueue.Key) {

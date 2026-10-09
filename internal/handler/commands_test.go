@@ -92,7 +92,7 @@ func TestMatchCommand(t *testing.T) {
 	assert.True(t, h.MatchCommand(commandUpdate("/status@MyBot")))
 	assert.True(t, h.MatchCommand(commandUpdate("/new")))
 	assert.False(t, h.MatchCommand(commandUpdate("/stop@OtherBot")))
-	assert.False(t, h.MatchCommand(commandUpdate("/start")))
+	assert.False(t, h.MatchCommand(commandUpdate("/unknown")))
 	assert.False(t, h.MatchCommand(commandUpdate("please /stop")))
 	assert.False(t, h.MatchCommand(&models.Update{}))
 }
@@ -367,4 +367,21 @@ func TestStatusButtons_CompactAndNewConversation(t *testing.T) {
 
 	h.Button(context.Background(), nil, press(msg, "reset"))
 	assert.Equal(t, "🆕 Начат новый разговор.", nextSend(t, sends).text)
+}
+
+func TestHelpCommand_ListsOnlyWhatWorksHere(t *testing.T) {
+	sent := &safeSent{}
+	h := newTestHandler(t, &mockProvider{client: &mockClient{}}, nil)
+	h.Send = sent.send
+	require.True(t, h.MatchCommand(commandUpdate("/start")))
+
+	h.Command(context.Background(), nil, commandUpdate("/help"))
+
+	require.Eventually(t, func() bool { return len(sent.all()) == 1 }, 5*time.Second, 10*time.Millisecond)
+	text := sent.all()[0]
+	assert.Contains(t, text, "Команды:\n/stop — остановить ответ и очистить очередь\n/new — начать новый разговор\n")
+	assert.Contains(t, text, "/help — что умеет бот\n\nКнопки:")
+	assert.NotContains(t, text, "/tasks")
+	assert.NotContains(t, text, "/model")
+	assert.NotContains(t, text, "/memory")
 }
