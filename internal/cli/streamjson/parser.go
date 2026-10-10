@@ -155,7 +155,7 @@ func (w *StreamWriter) handleLine(line []byte) {
 
 	switch event.Type {
 	case "assistant":
-		w.handleAssistant(event.Message)
+		w.handleAssistant(event.Message, event.ParentToolUseID)
 	case "result":
 		w.resultText = event.Result
 	case "stream_event":
@@ -180,9 +180,10 @@ func (w *StreamWriter) handlePartial(event *streamEvent) {
 	}
 }
 
-func (w *StreamWriter) handleAssistant(raw json.RawMessage) {
+func (w *StreamWriter) handleAssistant(raw json.RawMessage, parentToolUseID string) {
 	text, tools := parseAssistant(raw)
-	if text != "" {
+	// Skip subagent output: only the main agent's replies may reach display and command blocks.
+	if text != "" && parentToolUseID == "" {
 		w.messages = append(w.messages, text)
 		if w.onMessage != nil {
 			w.onMessage(text)
