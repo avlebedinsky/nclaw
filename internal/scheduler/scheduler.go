@@ -199,8 +199,16 @@ func (s *Scheduler) CancelTask(id string) error {
 	return nil
 }
 
-// addJob creates a gocron job for the given task.
-func (s *Scheduler) addJob(task *model.ScheduledTask) error {
+// addJob creates a gocron job for the given task. A malformed cron value (e.g. a broken
+// TZ= prefix) makes the underlying parser panic; recover so the task is rejected instead
+// of wedging the scheduler or crash-looping startup.
+func (s *Scheduler) addJob(task *model.ScheduledTask) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("invalid schedule %q: %v", task.ScheduleValue, r)
+		}
+	}()
+
 	def, err := s.jobDefinition(task)
 	if err != nil {
 		return err

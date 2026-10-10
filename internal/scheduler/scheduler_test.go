@@ -1253,3 +1253,37 @@ func TestCreateTask_AllowsMinuteInterval(t *testing.T) {
 	})
 	require.NoError(t, err)
 }
+
+func TestCreateTask_RejectsPanicCron(t *testing.T) {
+	s := setupTestScheduler(t)
+	s.Start()
+	defer s.Shutdown()
+
+	err := s.CreateTask(&model.ScheduledTask{
+		ID: "badcron", ChatID: 1, Prompt: "p",
+		ScheduleType: model.ScheduleCron, ScheduleValue: "TZ=UTC",
+		ContextMode: model.ContextGroup, Status: model.StatusActive, CreatedAt: time.Now(),
+	})
+	require.Error(t, err)
+
+	var count int64
+	require.NoError(t, s.db.Model(&model.ScheduledTask{}).Count(&count).Error)
+	assert.Zero(t, count)
+}
+
+func TestLoadTasks_DisablesPanicCron(t *testing.T) {
+	s := setupTestScheduler(t)
+	require.NoError(t, s.db.Create(&model.ScheduledTask{
+		ID: "badcron", ChatID: 1, Prompt: "p",
+		ScheduleType: model.ScheduleCron, ScheduleValue: "TZ=UTC",
+		ContextMode: model.ContextGroup, Status: model.StatusActive, CreatedAt: time.Now(),
+	}).Error)
+
+	require.NotPanics(t, s.LoadTasks)
+	require.NotPanics(t, s.Start)
+	defer s.Shutdown()
+
+	var got model.ScheduledTask
+	require.NoError(t, s.db.First(&got, "id = ?", "badcron").Error)
+	assert.Equal(t, model.StatusFailed, got.Status)
+}
