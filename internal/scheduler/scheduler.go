@@ -26,6 +26,7 @@ import (
 const (
 	keepRunLogs           = 20
 	finishedTaskRetention = 30 * 24 * time.Hour
+	minInterval           = time.Minute
 )
 
 // Runner executes a job in its chat's queue and waits for it.
@@ -245,6 +246,9 @@ func (s *Scheduler) jobDefinition(task *model.ScheduledTask) (gocron.JobDefiniti
 		d, err := time.ParseDuration(task.ScheduleValue)
 		if err != nil {
 			return nil, fmt.Errorf("parse interval %q: %w", task.ScheduleValue, err)
+		}
+		if d < minInterval {
+			return nil, fmt.Errorf("interval %s is too short, minimum is %s", d, minInterval)
 		}
 		return gocron.DurationJob(d), nil
 	case model.ScheduleOnce:
