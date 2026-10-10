@@ -57,7 +57,7 @@ func TestExecuteBlocks_CreateTask(t *testing.T) {
 		`{"action":"create","prompt":"check weather","type":"interval","value":"1h"}` +
 		"\n```\nDone!"
 	errMsg := s.ExecuteBlocks(text, 100, 5)
-	assert.Empty(t, errMsg)
+	assert.Contains(t, errMsg, "Задача создана")
 
 	display := blocks.StripAll(text)
 	assert.Contains(t, display, "I'll set that up.")
@@ -106,7 +106,7 @@ func TestExecuteBlocks_CreateWithContextMode(t *testing.T) {
 		`{"action":"create","prompt":"check","type":"interval","value":"30m","context":"isolated"}` +
 		"\n```"
 	result := s.ExecuteBlocks(text, 200, 0)
-	assert.Empty(t, result)
+	assert.Contains(t, result, "Задача создана")
 
 	var tasks []model.ScheduledTask
 	require.NoError(t, s.db.Find(&tasks).Error)
@@ -136,7 +136,7 @@ func TestExecuteBlocks_CreateNotifyTask(t *testing.T) {
 	text := "```nclaw:schedule\n" +
 		`{"action":"create","prompt":"⏰ Call the dentist","type":"interval","value":"1h","context":"notify"}` +
 		"\n```"
-	assert.Empty(t, s.ExecuteBlocks(text, 200, 0))
+	assert.Contains(t, s.ExecuteBlocks(text, 200, 0), "Задача создана")
 
 	var tasks []model.ScheduledTask
 	require.NoError(t, s.db.Find(&tasks).Error)
@@ -175,7 +175,7 @@ func TestExecuteBlocks_Success(t *testing.T) {
 		`{"action":"create","prompt":"check weather","type":"interval","value":"1h"}` +
 		"\n```\nmore"
 	result := s.ExecuteBlocks(text, 100, 0)
-	assert.Empty(t, result)
+	assert.Contains(t, result, "Задача создана")
 
 	var tasks []model.ScheduledTask
 	require.NoError(t, s.db.Find(&tasks).Error)
@@ -199,7 +199,7 @@ func TestExecuteBlocks_MixedSuccessAndError(t *testing.T) {
 		`{"action":"create","prompt":"ok","type":"interval","value":"1h"}` +
 		"\n```\n```nclaw:schedule\n{bad}\n```"
 	result := s.ExecuteBlocks(text, 100, 0)
-	assert.Contains(t, result, "[Ошибка расписания:")
+	assert.Contains(t, result, "Ошибка расписания:")
 
 	var tasks []model.ScheduledTask
 	require.NoError(t, s.db.Find(&tasks).Error)
@@ -311,7 +311,7 @@ func TestExecuteBlocks_TaskActionByOwner(t *testing.T) {
 	require.NoError(t, s.CreateTask(task))
 
 	block := "```nclaw:schedule\n{\"action\":\"pause\",\"task_id\":\"" + task.ID + "\"}\n```"
-	assert.Empty(t, s.ExecuteBlocks(block, 100, 5))
+	assert.Contains(t, s.ExecuteBlocks(block, 100, 5), "приостановлена")
 
 	var got model.ScheduledTask
 	require.NoError(t, s.db.First(&got, "id = ?", task.ID).Error)
@@ -342,4 +342,23 @@ func TestFormatTaskList_HidesFinishedTasks(t *testing.T) {
 	assert.Contains(t, result, "task-paused")
 	assert.NotContains(t, result, "task-done")
 	assert.NotContains(t, result, "task-failed")
+}
+
+func TestExecuteBlocks_ReportsResumeAndCancel(t *testing.T) {
+	s := setupTestScheduler(t)
+	s.Start()
+	defer s.Shutdown()
+
+	task := &model.ScheduledTask{
+		ID: model.GenerateTaskID(), ChatID: 100, Prompt: "p",
+		ScheduleType: model.ScheduleInterval, ScheduleValue: "1h",
+		ContextMode: model.ContextGroup, Status: model.StatusPaused, CreatedAt: time.Now(),
+	}
+	require.NoError(t, s.db.Create(task).Error)
+
+	resume := "```nclaw:schedule\n{\"action\":\"resume\",\"task_id\":\"" + task.ID + "\"}\n```"
+	assert.Contains(t, s.ExecuteBlocks(resume, 100, 0), "возобновлена")
+
+	cancel := "```nclaw:schedule\n{\"action\":\"cancel\",\"task_id\":\"" + task.ID + "\"}\n```"
+	assert.Contains(t, s.ExecuteBlocks(cancel, 100, 0), "удалена")
 }
