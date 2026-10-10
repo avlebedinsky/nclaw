@@ -301,3 +301,15 @@ func TestStreamWriter_ReportsPartialText(t *testing.T) {
 	assert.Equal(t, []string{"Hel", "Hello", "Done"}, drafts)
 	assert.Equal(t, "Done", w.Result().Text)
 }
+
+func TestParseOutput_SubagentTextExcluded(t *testing.T) {
+	output := `{"type":"assistant","parent_tool_use_id":"toolu_1","message":{"content":[{"type":"text","text":"Fetched page says: ` + "```" + `nclaw:schedule\n{\"action\":\"create\"}\n` + "```" + `"}]}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Here is the summary."}]}}
+{"type":"result","result":"Here is the summary."}`
+
+	result := ParseOutput([]byte(output))
+
+	assert.Equal(t, "Here is the summary.", result.Text)
+	assert.NotContains(t, result.FullText, "nclaw:schedule")
+	assert.Equal(t, []string{"Here is the summary."}, result.Messages)
+}

@@ -1214,3 +1214,76 @@ func TestChatTasks_NextRunFromTheLiveScheduleInTheSchedulersZone(t *testing.T) {
 	assert.Equal(t, msk, tasks[0].NextRun.Location())
 	assert.WithinDuration(t, time.Now().Add(time.Hour), *tasks[0].NextRun, time.Minute)
 }
+
+func TestCreateTask_RejectsTinyInterval(t *testing.T) {
+	s := setupTestScheduler(t)
+	s.Start()
+	defer s.Shutdown()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- s.CreateTask(&model.ScheduledTask{
+			ID: "tiny", ChatID: 1, Prompt: "p",
+			ScheduleType: model.ScheduleInterval, ScheduleValue: "1ns",
+			ContextMode: model.ContextGroup, Status: model.StatusActive, CreatedAt: time.Now(),
+		})
+	}()
+
+	select {
+	case err := <-done:
+		require.Error(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("CreateTask with a sub-minute interval hung")
+	}
+
+	var count int64
+	require.NoError(t, s.db.Model(&model.ScheduledTask{}).Count(&count).Error)
+	assert.Zero(t, count, "rejected task must not persist")
+}
+
+func TestCreateTask_AllowsMinuteInterval(t *testing.T) {
+	s := setupTestScheduler(t)
+	s.Start()
+	defer s.Shutdown()
+
+	err := s.CreateTask(&model.ScheduledTask{
+		ID: "ok", ChatID: 1, Prompt: "p",
+		ScheduleType: model.ScheduleInterval, ScheduleValue: "1m",
+		ContextMode: model.ContextGroup, Status: model.StatusActive, CreatedAt: time.Now(),
+	})
+	require.NoError(t, err)
+}
+
+func TestCreateTask_RejectsPanicCron(t *testing.T) {
+	s := setupTestScheduler(t)
+	s.Start()
+	defer s.Shutdown()
+
+	err := s.CreateTask(&model.ScheduledTask{
+		ID: "badcron", ChatID: 1, Prompt: "p",
+		ScheduleType: model.ScheduleCron, ScheduleValue: "TZ=UTC",
+		ContextMode: model.ContextGroup, Status: model.StatusActive, CreatedAt: time.Now(),
+	})
+	require.Error(t, err)
+
+	var count int64
+	require.NoError(t, s.db.Model(&model.ScheduledTask{}).Count(&count).Error)
+	assert.Zero(t, count)
+}
+
+func TestLoadTasks_DisablesPanicCron(t *testing.T) {
+	s := setupTestScheduler(t)
+	require.NoError(t, s.db.Create(&model.ScheduledTask{
+		ID: "badcron", ChatID: 1, Prompt: "p",
+		ScheduleType: model.ScheduleCron, ScheduleValue: "TZ=UTC",
+		ContextMode: model.ContextGroup, Status: model.StatusActive, CreatedAt: time.Now(),
+	}).Error)
+
+	require.NotPanics(t, s.LoadTasks)
+	require.NotPanics(t, s.Start)
+	defer s.Shutdown()
+
+	var got model.ScheduledTask
+	require.NoError(t, s.db.First(&got, "id = ?", "badcron").Error)
+	assert.Equal(t, model.StatusFailed, got.Status)
+}

@@ -29,36 +29,61 @@ func (s *Scheduler) ExecuteBlocks(text string, chatID int64, threadID int) strin
 		return ""
 	}
 
-	var errs []string
+	var notes, errs []string
 
 	for _, match := range matches {
-		if err := s.executeCommand(match[1], chatID, threadID); err != nil {
+		note, err := s.executeCommand(match[1], chatID, threadID)
+		if err != nil {
 			log.Printf("scheduler: command error: %v", err)
 			errs = append(errs, err.Error())
+			continue
+		}
+		if note != "" {
+			notes = append(notes, note)
 		}
 	}
 
 	if len(errs) > 0 {
-		return "[Ошибка расписания: " + strings.Join(errs, "; ") + "]"
+		notes = append(notes, "Ошибка расписания: "+strings.Join(errs, "; "))
 	}
-	return ""
+	if len(notes) == 0 {
+		return ""
+	}
+	return "[" + strings.Join(notes, " ") + "]"
 }
 
-func (s *Scheduler) executeCommand(jsonStr string, chatID int64, threadID int) error {
+func (s *Scheduler) executeCommand(jsonStr string, chatID int64, threadID int) (string, error) {
 	var cmd scheduleCommand
 	if err := json.Unmarshal([]byte(jsonStr), &cmd); err != nil {
-		return fmt.Errorf("invalid JSON: %w", err)
+		return "", fmt.Errorf("invalid JSON: %w", err)
 	}
 
 	log.Printf("scheduler: processing command action=%s task_id=%s", cmd.Action, cmd.TaskID)
 
 	switch cmd.Action {
 	case "create":
-		return s.createTaskFromCommand(&cmd, chatID, threadID)
+		if err := s.createTaskFromCommand(&cmd, chatID, threadID); err != nil {
+			return "", err
+		}
+		return "🗓 Задача создана.", nil
 	case "pause", "resume", "cancel":
-		return s.TaskAction(cmd.Action, cmd.TaskID, chatID, threadID)
+		if err := s.TaskAction(cmd.Action, cmd.TaskID, chatID, threadID); err != nil {
+			return "", err
+		}
+		return actionNote(cmd.Action), nil
 	default:
-		return fmt.Errorf("unknown action %q", cmd.Action)
+		return "", fmt.Errorf("unknown action %q", cmd.Action)
+	}
+}
+
+func actionNote(action string) string {
+	switch action {
+	case "pause":
+		return "⏸ Задача приостановлена."
+	case "resume":
+		return "▶️ Задача возобновлена."
+	default:
+		return "🗑 Задача удалена."
 	}
 }
 

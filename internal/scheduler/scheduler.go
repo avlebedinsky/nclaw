@@ -26,6 +26,7 @@ import (
 const (
 	keepRunLogs           = 20
 	finishedTaskRetention = 30 * 24 * time.Hour
+	minInterval           = time.Minute
 )
 
 // Runner executes a job in its chat's queue and waits for it.
@@ -198,8 +199,16 @@ func (s *Scheduler) CancelTask(id string) error {
 	return nil
 }
 
-// addJob creates a gocron job for the given task.
-func (s *Scheduler) addJob(task *model.ScheduledTask) error {
+// addJob creates a gocron job for the given task. A malformed cron value (e.g. a broken
+// TZ= prefix) makes the underlying parser panic; recover so the task is rejected instead
+// of wedging the scheduler or crash-looping startup.
+func (s *Scheduler) addJob(task *model.ScheduledTask) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("invalid schedule %q: %v", task.ScheduleValue, r)
+		}
+	}()
+
 	def, err := s.jobDefinition(task)
 	if err != nil {
 		return err
@@ -245,6 +254,9 @@ func (s *Scheduler) jobDefinition(task *model.ScheduledTask) (gocron.JobDefiniti
 		d, err := time.ParseDuration(task.ScheduleValue)
 		if err != nil {
 			return nil, fmt.Errorf("parse interval %q: %w", task.ScheduleValue, err)
+		}
+		if d < minInterval {
+			return nil, fmt.Errorf("interval %s is too short, minimum is %s", d, minInterval)
 		}
 		return gocron.DurationJob(d), nil
 	case model.ScheduleOnce:
