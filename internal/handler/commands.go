@@ -21,13 +21,15 @@ import (
 	"github.com/nickalie/nclaw/internal/pipeline"
 	"github.com/nickalie/nclaw/internal/ru"
 	"github.com/nickalie/nclaw/internal/skills"
+	"github.com/nickalie/nclaw/internal/telegram"
 )
 
 const (
 	autoMemoryIndex = "MEMORY.md"
 	helpIntro       = "🤖 Пишите задачу обычным сообщением: текстом, голосом, с файлами или фото. " +
 		"Что придёт, пока бот занят, он прочитает вместе и ответит одним сообщением."
-	helpButtons = "Кнопки:\n" +
+	purposeExample = "/purpose Учёт семейных расходов: каждую трату записывай в таблицу."
+	helpButtons    = "Кнопки:\n" +
 		"• под сообщением о ходе работы — ⏹ Стоп и ⏭ Ответить на новые;\n" +
 		"• под напоминанием — ✅ Готово и отложить на 15 минут, час или до завтра;\n" +
 		"• под вопросом бота — варианты ответа."
@@ -43,6 +45,7 @@ var Commands = []models.BotCommand{
 	{Command: "tasks", Description: "Задачи по расписанию в этом чате"},
 	{Command: "model", Description: "Выбрать модель для этого чата"},
 	{Command: "skills", Description: "Какие скиллы доступны здесь"},
+	{Command: "purpose", Description: "Для чего этот чат или топик"},
 	{Command: "memory", Description: "Что бот помнит об этом чате"},
 	{Command: "help", Description: "Что умеет бот"},
 }
@@ -64,7 +67,7 @@ func (h *Handler) MatchCommand(update *models.Update) bool {
 		return false
 	}
 	name, forMe, ok := parseCommand(update.Message.Text, h.BotUsername)
-	return ok && forMe && h.commandFunc(name) != nil
+	return ok && forMe && h.commandFunc(name, "") != nil
 }
 
 // Command runs one of nclaw's own commands without waiting for the chat's queue.
@@ -73,7 +76,15 @@ func (h *Handler) Command(_ context.Context, _ *bot.Bot, update *models.Update) 
 	name, _, _ := parseCommand(msg.Text, h.BotUsername)
 	key := chatqueue.Key{ChatID: msg.Chat.ID, ThreadID: msg.MessageThreadID}
 	log.Printf("handler: command /%s from chat=%d thread=%d", name, key.ChatID, key.ThreadID)
-	h.commandFunc(name)(key)
+	h.commandFunc(name, commandArgs(msg.Text))(key)
+}
+
+func commandArgs(text string) string {
+	loc := commandRe.FindStringIndex(text)
+	if loc == nil {
+		return ""
+	}
+	return strings.TrimSpace(text[loc[1]:])
 }
 
 // MatchStopGeneration reports whether the user pressed the stop button of a live draft.
@@ -89,9 +100,10 @@ func (h *Handler) StopGeneration(_ context.Context, _ *bot.Bot, update *models.U
 	h.stop(key)
 }
 
-func (h *Handler) commandFunc(name string) func(chatqueue.Key) {
+func (h *Handler) commandFunc(name, args string) func(chatqueue.Key) {
 	commands := map[string]func(chatqueue.Key){
 		"stop": h.stop, "new": h.newSession, "status": h.status, "help": h.help, "start": h.help,
+		"purpose": func(key chatqueue.Key) { h.purpose(key, args) },
 	}
 	if h.Tasks != nil {
 		commands["tasks"] = h.tasks
@@ -323,7 +335,7 @@ func (h *Handler) modelView(key chatqueue.Key) (string, buttons.Keyboard) {
 func (h *Handler) help(key chatqueue.Key) {
 	lines := []string{helpIntro, "", "Команды:"}
 	for _, c := range Commands {
-		if h.commandFunc(c.Command) != nil {
+		if h.commandFunc(c.Command, "") != nil {
 			lines = append(lines, "/"+c.Command+" — "+lowerFirst(c.Description))
 		}
 	}
@@ -336,6 +348,34 @@ func lowerFirst(s string) string {
 		return s
 	}
 	return strings.ToLower(string(r[0])) + string(r[1:])
+}
+
+func (h *Handler) purpose(key chatqueue.Key, text string) {
+	if text == "" {
+		view, kb := h.purposeView(key)
+		go h.sendWithin(key, view, kb, 15*time.Second)
+		return
+	}
+	if err := telegram.SavePurpose(h.Invoker.ChatDir(key.ChatID, key.ThreadID), text); err != nil {
+		go h.notify(key, "Не удалось сохранить назначение: "+err.Error())
+		return
+	}
+	go h.sendWithin(key, "🎯 Назначение "+purposeOwner(key)+" сохранено:\n"+text, buttons.Purpose(), 15*time.Second)
+}
+
+func (h *Handler) purposeView(key chatqueue.Key) (string, buttons.Keyboard) {
+	purpose := telegram.Purpose(h.Invoker.ChatDir(key.ChatID, key.ThreadID))
+	if purpose == "" {
+		return "Назначение " + purposeOwner(key) + " не задано. Отправьте /purpose и текст, например:\n" + purposeExample, nil
+	}
+	return "🎯 Назначение " + purposeOwner(key) + ":\n" + purpose + "\n\nЧтобы заменить, отправьте /purpose с новым текстом.", buttons.Purpose()
+}
+
+func purposeOwner(key chatqueue.Key) string {
+	if key.ThreadID != 0 {
+		return "топика"
+	}
+	return "чата"
 }
 
 func (h *Handler) memory(key chatqueue.Key) {

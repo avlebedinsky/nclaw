@@ -329,6 +329,9 @@ func (i *Invoker) chatContext(chatID int64, threadID int) string {
 	if topic := telegram.TopicName(i.ChatDir(chatID, threadID)); threadID != 0 && topic != "" {
 		lines = append(lines, "This conversation is the topic «"+topic+"» of that chat; every topic is a separate conversation.")
 	}
+	if purpose := telegram.Purpose(i.ChatDir(chatID, threadID)); purpose != "" {
+		lines = append(lines, "What this conversation is for, as the person set it with /purpose:\n"+purpose)
+	}
 	if rule := i.sharedMemoryRule(chatID, threadID, chatDir); rule != "" {
 		lines = append(lines, rule)
 	}

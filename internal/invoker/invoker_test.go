@@ -392,6 +392,19 @@ func TestRun_NamesGroupTopicAndSharedMemory(t *testing.T) {
 	assert.Contains(t, client.systemPrompt, "go into "+filepath.Join(inv.ChatDir(-100123, 0), "CLAUDE.md"))
 }
 
+func TestRun_PutsTheConversationPurposeIntoThePrompt(t *testing.T) {
+	client := &fakeClient{result: &cli.Result{}}
+	inv := newTestInvoker(t, &fakeProvider{client: client}, Options{})
+	require.NoError(t, telegram.SavePurpose(inv.ChatDir(-100123, 1224), "Учёт расходов.\nКаждую трату — в таблицу."))
+
+	inv.Run(context.Background(), Request{ChatID: -100123, ThreadID: 1224, Prompt: "x"})
+	assert.Contains(t, client.systemPrompt, "What this conversation is for, as the person set it with /purpose:\n"+
+		"Учёт расходов.\nКаждую трату — в таблицу.")
+
+	inv.Run(context.Background(), Request{ChatID: -100123, ThreadID: 5, Prompt: "x"})
+	assert.NotContains(t, client.systemPrompt, "/purpose")
+}
+
 func TestRun_SharedMemoryOnlyForProvidersThatLoadIt(t *testing.T) {
 	client := &fakeClient{result: &cli.Result{}}
 	inv := newTestInvoker(t, &fakeProvider{client: client}, Options{})

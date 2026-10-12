@@ -17,6 +17,7 @@ import (
 	"github.com/nickalie/nclaw/internal/chatqueue"
 	"github.com/nickalie/nclaw/internal/cli"
 	"github.com/nickalie/nclaw/internal/pipeline"
+	"github.com/nickalie/nclaw/internal/telegram"
 )
 
 type safeSent struct {
@@ -327,6 +328,67 @@ func TestMemoryCommand_UnavailableWithoutMemory(t *testing.T) {
 	h := newTestHandler(t, &mockProvider{client: &mockClient{}}, nil)
 
 	assert.False(t, h.MatchCommand(commandUpdate("/memory")))
+}
+
+func TestPurposeCommand_SetsShowsAndClearsTheTopicPurpose(t *testing.T) {
+	h := newTestHandler(t, &mockProvider{client: &mockClient{}}, nil)
+	h.BotUsername = "MyBot"
+	fb := &fakeButtons{}
+	h.Buttons = fb
+	sends := captureSends(h)
+	dir := h.Invoker.ChatDir(100, 7)
+	set := commandUpdate("/purpose@MyBot  Учёт расходов.\nКаждую трату — в таблицу.")
+	set.Message.MessageThreadID = 7
+	require.True(t, h.MatchCommand(set))
+
+	h.Command(context.Background(), nil, set)
+
+	m := nextSend(t, sends)
+	assert.Equal(t, "🎯 Назначение топика сохранено:\nУчёт расходов.\nКаждую трату — в таблицу.", m.text)
+	assert.Equal(t, buttons.Purpose(), m.dest.Buttons)
+	assert.Equal(t, "Учёт расходов.\nКаждую трату — в таблицу.", telegram.Purpose(dir))
+
+	show := commandUpdate("/purpose")
+	show.Message.MessageThreadID = 7
+	h.Command(context.Background(), nil, show)
+	m = nextSend(t, sends)
+	assert.Equal(t, "🎯 Назначение топика:\nУчёт расходов.\nКаждую трату — в таблицу.\n\n"+
+		"Чтобы заменить, отправьте /purpose с новым текстом.", m.text)
+	assert.Equal(t, buttons.Purpose(), m.dest.Buttons)
+
+	h.Button(context.Background(), nil, press(&models.Message{ID: 4, Chat: models.Chat{ID: 100}, MessageThreadID: 7}, "clear-purpose"))
+	assert.Equal(t, "🗑 Назначение убрано", fb.waitAnswer(t))
+	e := fb.waitEdit(t)
+	assert.Equal(t, "Назначение топика не задано. Отправьте /purpose и текст, например:\n"+purposeExample, e.text)
+	assert.Nil(t, e.kb)
+	assert.Empty(t, telegram.Purpose(dir))
+}
+
+func TestPurposeCommand_NotSetInChat(t *testing.T) {
+	h := newTestHandler(t, &mockProvider{client: &mockClient{}}, nil)
+	sends := captureSends(h)
+
+	h.Command(context.Background(), nil, commandUpdate("/purpose"))
+
+	m := nextSend(t, sends)
+	assert.Equal(t, "Назначение чата не задано. Отправьте /purpose и текст, например:\n"+purposeExample, m.text)
+	assert.Nil(t, m.dest.Buttons)
+}
+
+func TestPurposeCommand_ReportsFailures(t *testing.T) {
+	h := newTestHandler(t, &mockProvider{client: &mockClient{}}, nil)
+	fb := &fakeButtons{}
+	h.Buttons = fb
+	sends := captureSends(h)
+	dir := h.Invoker.ChatDir(100, 0)
+	require.NoError(t, os.MkdirAll(filepath.Dir(dir), 0o755))
+	require.NoError(t, os.WriteFile(dir, nil, 0o644))
+
+	h.Command(context.Background(), nil, commandUpdate("/purpose Учёт расходов"))
+	assert.Contains(t, nextSend(t, sends).text, "Не удалось сохранить назначение: ")
+
+	h.Button(context.Background(), nil, press(&models.Message{ID: 4, Chat: models.Chat{ID: 100}}, "clear-purpose"))
+	assert.Contains(t, fb.waitAnswer(t), "Не удалось убрать назначение: ")
 }
 
 type contextProvider struct {

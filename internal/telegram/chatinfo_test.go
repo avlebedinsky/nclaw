@@ -62,3 +62,23 @@ func TestIsPrivateChat(t *testing.T) {
 	assert.True(t, IsPrivateChat(375321681))
 	assert.False(t, IsPrivateChat(-1003874128370))
 }
+
+func TestSavePurpose_KeepsLinesAndRemovesWhenEmpty(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "topic")
+
+	require.NoError(t, SavePurpose(dir, "  Учёт расходов.\nКаждую трату — в таблицу.\n "))
+	assert.Equal(t, "Учёт расходов.\nКаждую трату — в таблицу.", Purpose(dir))
+
+	require.NoError(t, SavePurpose(dir, " "))
+	assert.Empty(t, Purpose(dir))
+	assert.NoFileExists(t, filepath.Join(dir, purposeFile))
+	require.NoError(t, SavePurpose(dir, ""))
+}
+
+func TestSavePurpose_ReportsErrors(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "file")
+	require.NoError(t, os.WriteFile(file, nil, 0o644))
+
+	assert.Error(t, SavePurpose(file, "Учёт расходов"))
+	assert.Error(t, SavePurpose(file, ""))
+}

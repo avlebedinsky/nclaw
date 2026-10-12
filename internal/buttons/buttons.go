@@ -38,6 +38,7 @@ const (
 	ForgetMemory
 	Compact
 	NewConversation
+	ClearPurpose
 )
 
 // Task actions carried by TaskAction buttons.
@@ -68,6 +69,7 @@ var (
 	taskCodes   = map[string]string{TaskPause: "p", TaskResume: "r", TaskCancel: "c"}
 	plainKinds  = map[string]Kind{
 		"d": Done, "s": Stop, "n": AnswerNew, "forget": ForgetMemory, "compact": Compact, "reset": NewConversation,
+		"clear-purpose": ClearPurpose,
 	}
 )
 
@@ -160,6 +162,11 @@ func Conversation() Keyboard {
 // Memory returns the button under the memory view that clears the conversation's automatic memory.
 func Memory() Keyboard {
 	return Keyboard{{{Text: "🧹 Очистить память разговора", Data: "forget"}}}
+}
+
+// Purpose returns the button under the purpose view that removes the conversation's purpose.
+func Purpose() Keyboard {
+	return Keyboard{{{Text: "🗑 Убрать", Data: "clear-purpose"}}}
 }
 
 // Markup converts kb to a Telegram inline keyboard; an empty kb removes the keyboard of an edited message.
