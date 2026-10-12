@@ -9,6 +9,7 @@ import (
 const (
 	chatNameFile  = ".nclaw-chat-name"
 	topicNameFile = ".nclaw-topic-name"
+	purposeFile   = ".nclaw-purpose"
 	maxNameRunes  = 128
 )
 
@@ -40,19 +41,48 @@ func TopicName(topicDir string) string {
 	return readName(topicDir, topicNameFile)
 }
 
+// SavePurpose records what the conversation in dir is for, as the person set it with
+// /purpose; an empty purpose removes the record.
+func SavePurpose(dir, purpose string) error {
+	purpose = strings.TrimSpace(purpose)
+	if purpose != "" {
+		return writeFile(dir, purposeFile, purpose)
+	}
+	if err := os.Remove(filepath.Join(dir, purposeFile)); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+// Purpose returns the purpose recorded by SavePurpose, or "" when there is none.
+func Purpose(dir string) string {
+	data, err := os.ReadFile(filepath.Join(dir, purposeFile))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
 func saveName(dir, file, name string) (bool, error) {
 	name = cleanName(name)
 	if name == "" || readName(dir, file) == name {
 		return false, nil
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := writeFile(dir, file, name); err != nil {
 		return false, err
+	}
+	return true, nil
+}
+
+func writeFile(dir, file, text string) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
 	}
 	tmp := filepath.Join(dir, file+".tmp")
-	if err := os.WriteFile(tmp, []byte(name+"\n"), 0o644); err != nil {
-		return false, err
+	if err := os.WriteFile(tmp, []byte(text+"\n"), 0o644); err != nil {
+		return err
 	}
-	return true, os.Rename(tmp, filepath.Join(dir, file))
+	return os.Rename(tmp, filepath.Join(dir, file))
 }
 
 func readName(dir, file string) string {

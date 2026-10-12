@@ -14,6 +14,7 @@ import (
 	"github.com/nickalie/nclaw/internal/chatqueue"
 	"github.com/nickalie/nclaw/internal/model"
 	"github.com/nickalie/nclaw/internal/ru"
+	"github.com/nickalie/nclaw/internal/telegram"
 )
 
 const staleButton = "Эта кнопка больше не работает."
@@ -58,6 +59,7 @@ func (h *Handler) press(q *models.CallbackQuery, msg *models.Message, p buttons.
 		buttons.Model:        func() string { return h.modelButton(msg, key, p.Model) },
 		buttons.ForgetMemory: func() string { return h.forgetMemory(msg, key) },
 		buttons.Compact:      func() string { return h.compact(key) },
+		buttons.ClearPurpose: func() string { return h.clearPurpose(msg, key) },
 		buttons.NewConversation: func() string {
 			h.newSession(key)
 			return "🆕 Начинаю новый разговор"
@@ -81,6 +83,15 @@ func (h *Handler) forgetMemory(msg *models.Message, key chatqueue.Key) string {
 	text, kb := h.memoryView(key)
 	go h.edit(msg, text, nil, kb)
 	return "🧹 Память разговора очищена"
+}
+
+func (h *Handler) clearPurpose(msg *models.Message, key chatqueue.Key) string {
+	if err := telegram.SavePurpose(h.Invoker.ChatDir(key.ChatID, key.ThreadID), ""); err != nil {
+		return "Не удалось убрать назначение: " + err.Error()
+	}
+	text, kb := h.purposeView(key)
+	go h.edit(msg, text, nil, kb)
+	return "🗑 Назначение убрано"
 }
 
 var (

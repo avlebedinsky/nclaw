@@ -10,18 +10,19 @@ import (
 
 func TestParse(t *testing.T) {
 	cases := map[string]Press{
-		"c:2":         {Kind: Choice, Index: 2},
-		"z:15":        {Kind: Snooze, After: 15 * time.Minute},
-		"z:1440":      {Kind: Snooze, After: 24 * time.Hour},
-		"d":           {Kind: Done},
-		"s":           {Kind: Stop},
-		"n":           {Kind: AnswerNew},
-		"t:p:task-1a": {Kind: TaskAction, Action: TaskPause, TaskID: "task-1a"},
-		"t:r:task-1a": {Kind: TaskAction, Action: TaskResume, TaskID: "task-1a"},
-		"t:c:task-1a": {Kind: TaskAction, Action: TaskCancel, TaskID: "task-1a"},
-		"forget":      {Kind: ForgetMemory},
-		"compact":     {Kind: Compact},
-		"reset":       {Kind: NewConversation},
+		"c:2":           {Kind: Choice, Index: 2},
+		"z:15":          {Kind: Snooze, After: 15 * time.Minute},
+		"z:1440":        {Kind: Snooze, After: 24 * time.Hour},
+		"d":             {Kind: Done},
+		"s":             {Kind: Stop},
+		"n":             {Kind: AnswerNew},
+		"t:p:task-1a":   {Kind: TaskAction, Action: TaskPause, TaskID: "task-1a"},
+		"t:r:task-1a":   {Kind: TaskAction, Action: TaskResume, TaskID: "task-1a"},
+		"t:c:task-1a":   {Kind: TaskAction, Action: TaskCancel, TaskID: "task-1a"},
+		"forget":        {Kind: ForgetMemory},
+		"compact":       {Kind: Compact},
+		"reset":         {Kind: NewConversation},
+		"clear-purpose": {Kind: ClearPurpose},
 	}
 	for data, want := range cases {
 		assert.Equal(t, want, Parse(data), data)
